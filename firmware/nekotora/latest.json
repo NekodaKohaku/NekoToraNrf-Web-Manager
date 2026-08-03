@@ -1,0 +1,7 @@
+{
+  "_comment": "由 CI 覆蓋此檔:version 顯示給使用者;versionCode 為 u32 版本碼(0x00MMmmpp,例如 1.2.3 = 66051 = 0x010203),與裝置 versionAddr 的值比對;hex 為相對本檔的韌體檔名。",
+  "version": "0.0.0",
+  "versionCode": 0,
+  "hex": "nekotora-0.0.0.hex",
+  "date": "2026-08-03"
+}

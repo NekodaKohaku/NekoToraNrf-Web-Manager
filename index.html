@@ -176,8 +176,6 @@ footer{max-width:760px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
           <option value="8000000">8 MHz</option>
         </select>
       </div>
-      <div class="optRow"><button class="btn danger" id="btnRecover" data-i18n="recover" style="font-size:13px;padding:8px 14px"></button>
-        <span id="recoverMsg" style="font-size:13px;color:var(--warn)"></span></div>
       <div style="margin-top:14px;font-weight:600" data-i18n="logTitle"></div>
       <div class="logBox" id="log"></div>
       <div class="logBtns">
@@ -225,6 +223,7 @@ const DEFAULT_DEVICES = {
       name: {zh: 'NekoTora 追蹤器', en: 'NekoTora Tracker', ja: 'NekoTora トラッカー'},
       chip: 'nrf52840',
       manifest: 'firmware/nekotora/latest.json',
+      usbFilters: [{vendorId: 0x0D28, productId: 0x0204}],   // narrows the browser device picker
     },
   ],
 };
@@ -236,7 +235,7 @@ zh: {
   subtitle:'{device} 網頁更新程式',
   unsupported:'此瀏覽器不支援 WebUSB / WebHID,請改用電腦版 Chrome 或 Edge 開啟本頁。',
   step1Title:'連接裝置',
-  step1Desc:'請將燒錄器(CMSIS-DAP)與追蹤器接上電腦 USB,按住裝置按鈕確保供電,然後點「連接裝置」,在跳出的視窗中選擇燒錄器。',
+  step1Desc:'請將追蹤器接上電腦 USB,然後點「連接裝置」,在跳出的視窗中選擇追蹤器。',
   connect:'連接裝置', connectHid:'無法連接?改用 HID 模式',
   probeNone:'未連接', probeConnected:'已連接:{name}',
   step2Title:'選擇韌體檔案',
@@ -259,10 +258,6 @@ zh: {
   advanced:'進階選項與詳細記錄',
   optVerify:'寫入後驗證(建議開啟)',
   optClock:'SWD 速度:',
-  recover:'解除晶片保護(Recover,會抹除全部資料)',
-  recoverConfirm:'此操作會抹除整顆晶片(含 UICR)!再按一次以確認執行。',
-  recoverDone:'Recover 完成。請將裝置完全斷電後重新上電,再重新燒錄韌體。',
-  recoverFailed:'Recover 失敗:{msg}',
   logTitle:'詳細記錄', logDownload:'下載記錄', logClear:'清除',
   footerNote:'需使用電腦版 Chrome 或 Edge(WebUSB / WebHID)。所有通訊都在你的電腦與裝置之間進行,韌體檔案不會上傳到任何伺服器。',
   autoDetected:'偵測到裝置:{name}',
@@ -292,7 +287,7 @@ zh: {
   errPowerUp:'無法啟動晶片除錯介面。請確認裝置有電(按住按鈕)且 SWD 接線正確',
   errNvmcTimeout:'Flash 操作逾時',
   errVerify:'驗證失敗:位址 {addr} 應為 {exp},實際為 {got}',
-  errProtected:'無法讀取晶片,可能已啟用讀取保護(APPROTECT)。可在進階選項執行「解除晶片保護」後重試(會抹除全部資料)',
+  errProtected:'無法讀取晶片(存取被拒)。請拔除 USB 重新插入後再試一次',
   errPart:'晶片型號不符,不是 nRF52840',
   warnPartMismatch:'注意:晶片 PART={part},與 nRF52840 不符',
   errDisconnected:'裝置已中斷連線', errUsbXfer:'USB 傳輸失敗',
@@ -302,7 +297,7 @@ en: {
   subtitle:'Web updater for {device}',
   unsupported:'This browser does not support WebUSB / WebHID. Please open this page in desktop Chrome or Edge.',
   step1Title:'Connect the device',
-  step1Desc:'Plug the CMSIS-DAP programmer and the tracker into USB, hold the device button to keep it powered, then click "Connect" and pick the programmer in the popup.',
+  step1Desc:'Connect the tracker to your computer via USB, then click "Connect" and pick the tracker in the popup.',
   connect:'Connect', connectHid:'Trouble connecting? Try HID mode',
   probeNone:'Not connected', probeConnected:'Connected: {name}',
   step2Title:'Select firmware file',
@@ -325,10 +320,6 @@ en: {
   advanced:'Advanced options & log',
   optVerify:'Verify after writing (recommended)',
   optClock:'SWD clock:',
-  recover:'Unlock chip (Recover — erases everything)',
-  recoverConfirm:'This will erase the ENTIRE chip including UICR! Click once more to confirm.',
-  recoverDone:'Recover done. Fully power-cycle the device, then flash the firmware again.',
-  recoverFailed:'Recover failed: {msg}',
   logTitle:'Log', logDownload:'Download log', logClear:'Clear',
   footerNote:'Requires desktop Chrome or Edge (WebUSB / WebHID). Everything runs locally between your computer and the device; the firmware file is never uploaded to any server.',
   autoDetected:'Device detected: {name}',
@@ -358,7 +349,7 @@ en: {
   errPowerUp:'Could not power up the debug interface. Check that the device is powered (hold the button) and SWD wiring is correct',
   errNvmcTimeout:'Flash operation timed out',
   errVerify:'Verification failed at {addr}: expected {exp}, got {got}',
-  errProtected:'Cannot read the chip — access port protection (APPROTECT) may be enabled. Use "Unlock chip" in Advanced options (erases everything), then retry.',
+  errProtected:'Cannot read the chip (access denied). Unplug the USB, plug it back in and try again.',
   errPart:'Chip is not an nRF52840',
   warnPartMismatch:'Warning: chip PART={part}, not an nRF52840',
   errDisconnected:'Device disconnected', errUsbXfer:'USB transfer failed',
@@ -368,7 +359,7 @@ ja: {
   subtitle:'{device} 用 Web 更新ツール',
   unsupported:'このブラウザは WebUSB / WebHID に対応していません。パソコン版の Chrome または Edge でこのページを開いてください。',
   step1Title:'機器を接続',
-  step1Desc:'書き込み器(CMSIS-DAP)とトラッカーをパソコンの USB に接続し、デバイスのボタンを押して電源を維持したまま「接続」をクリックし、表示された一覧から書き込み器を選択してください。',
+  step1Desc:'トラッカーをパソコンの USB に接続し、「接続」をクリックして、表示された一覧からトラッカーを選択してください。',
   connect:'接続', connectHid:'接続できない場合は HID モード',
   probeNone:'未接続', probeConnected:'接続済み:{name}',
   step2Title:'ファームウェアを選択',
@@ -391,10 +382,6 @@ ja: {
   advanced:'詳細設定とログ',
   optVerify:'書き込み後に検証する(推奨)',
   optClock:'SWD クロック:',
-  recover:'チップ保護を解除(Recover・全データ消去)',
-  recoverConfirm:'チップ全体(UICR を含む)が消去されます!実行するにはもう一度クリックしてください。',
-  recoverDone:'Recover 完了。デバイスの電源を完全に切って入れ直し、ファームウェアを書き込み直してください。',
-  recoverFailed:'Recover 失敗:{msg}',
   logTitle:'ログ', logDownload:'ログを保存', logClear:'クリア',
   footerNote:'パソコン版 Chrome または Edge(WebUSB / WebHID)が必要です。通信はすべてお使いのパソコンとデバイスの間で行われ、ファームウェアがサーバーに送信されることはありません。',
   autoDetected:'デバイスを検出:{name}',
@@ -424,7 +411,7 @@ ja: {
   errPowerUp:'デバッグインターフェースを起動できません。デバイスの電源(ボタン)と SWD 配線を確認してください',
   errNvmcTimeout:'Flash 操作がタイムアウトしました',
   errVerify:'検証失敗:アドレス {addr} 期待値 {exp}、実際 {got}',
-  errProtected:'チップを読み取れません。読み出し保護(APPROTECT)が有効の可能性があります。詳細設定の「チップ保護を解除」を実行後(全データ消去)、再試行してください',
+  errProtected:'チップを読み取れません(アクセス拒否)。USB を抜き差ししてから、もう一度お試しください',
   errPart:'チップが nRF52840 ではありません',
   warnPartMismatch:'警告:チップ PART={part}(nRF52840 ではありません)',
   errDisconnected:'デバイスが切断されました', errUsbXfer:'USB 転送に失敗しました',
@@ -815,7 +802,6 @@ const state = {
   manualFw: null,
   updating: false, stageKey: '', lastErr: null,
   resultKind: null, upToDateV: '',
-  recoverArmed: false,
 };
 function activeFw(){ return state.source === 'auto' ? state.autoFw : state.manualFw; }
 function devName(dev){
@@ -1009,12 +995,34 @@ function probeFail(e){
   el.textContent = errText(e);
   el.classList.remove('hidden');
 }
+function registryUsbFilters(){
+  const f = [];
+  for (const d of (state.registry.devices || [])){
+    for (const x of (d.usbFilters || [])) f.push(x);
+  }
+  return f;   // empty array = the picker shows every USB device
+}
 async function connectUsb(){
   if (!navigator.usb){ probeFail(mkErr('errNoWebUsb')); return; }
   try {
-    const dev = await navigator.usb.requestDevice({filters: []});
+    const dev = await navigator.usb.requestDevice({filters: registryUsbFilters()});
     await attachTransport(new WebUSBTransport(dev));
   } catch (e){ probeFail(e); }
+}
+/* Zero-click reconnect: once the user has authorized the device in the picker,
+ * the browser remembers it — we can open it silently on later visits, and when
+ * it is plugged in while the page is open. (The very first authorization always
+ * needs one click; that is a browser security rule that cannot be bypassed.) */
+async function tryAutoConnect(){
+  if (!navigator.usb || state.tr || state.updating) return;
+  try {
+    const devs = await navigator.usb.getDevices();
+    if (!devs.length) return;
+    const dev = devs.find(d => matchDevice(d.productName)) || (devs.length === 1 ? devs[0] : null);
+    if (!dev) return;
+    log('Auto-connecting to previously authorized device: ' + (dev.productName || '?'));
+    await attachTransport(new WebUSBTransport(dev));
+  } catch (e){ log('Auto-connect failed: ' + errText(e), 'warn'); }
 }
 async function connectHid(){
   if (!navigator.hid){ probeFail(mkErr('errNoWebHid')); return; }
@@ -1220,42 +1228,6 @@ async function startUpdate(){
   }
 }
 
-/* --------------------------- recover --------------------------------- */
-async function runRecover(){
-  const msg = $('recoverMsg');
-  if (!state.dap){ probeFail(mkErr('errNoProbe')); return; }
-  if (!state.recoverArmed){
-    state.recoverArmed = true;
-    msg.textContent = t('recoverConfirm');
-    setTimeout(() => { state.recoverArmed = false; if (msg.textContent === t('recoverConfirm')) msg.textContent = ''; }, 6000);
-    return;
-  }
-  state.recoverArmed = false;
-  msg.textContent = '…';
-  try {
-    const dap = state.dap, tgt = new Target(dap);
-    await dap.init(parseInt($('optClock').value, 10) || CONFIG.defaultSwdClockHz);
-    await tgt.dpInit();
-    // nRF52840 CTRL-AP is AP #1: ERASEALL @0x04, ERASEALLSTATUS @0x08
-    log('CTRL-AP ERASEALL…');
-    await tgt.apWrite(1, 0x04, 1);
-    const dl = Date.now() + 20000;
-    for (;;){
-      const s = await tgt.apRead(1, 0x08);
-      if (s === 0) break;
-      if (Date.now() > dl) throw mkErr('errNvmcTimeout');
-    }
-    await tgt.apWrite(1, 0x00, 1);   // CTRL-AP RESET
-    await tgt.apWrite(1, 0x00, 0);
-    await dap.disconnect();
-    log('Recover done');
-    msg.textContent = t('recoverDone');
-  } catch (e){
-    log('Recover failed: ' + errText(e), 'err');
-    msg.textContent = t('recoverFailed', {msg: errText(e)});
-  }
-}
-
 /* --------------------------- wiring ---------------------------------- */
 function init(){
   applyLang(detectLang());
@@ -1301,12 +1273,12 @@ function init(){
         }
       }
     })
-    .catch(() => {});
+    .catch(() => {})
+    .then(() => tryAutoConnect());
 
   $('btnStart').addEventListener('click', startUpdate);
   $('btnRetry').addEventListener('click', () => showView('pre'));
   $('btnAgain').addEventListener('click', () => showView('pre'));
-  $('btnRecover').addEventListener('click', runRecover);
 
   $('btnLogDl').addEventListener('click', () => {
     const blob = new Blob([logLines.join('\n')], {type: 'text/plain'});
@@ -1318,11 +1290,19 @@ function init(){
   });
   $('btnLogClear').addEventListener('click', () => { logLines.length = 0; logEl.textContent = ''; });
 
-  if (navigator.usb) navigator.usb.addEventListener('disconnect', e => {
-    if (state.tr && state.tr.kind === 'usb' && e.device === state.tr.device){
-      log(t('errDisconnected'), 'warn'); dropProbe();
-    }
-  });
+  if (navigator.usb){
+    navigator.usb.addEventListener('disconnect', e => {
+      if (state.tr && state.tr.kind === 'usb' && e.device === state.tr.device){
+        log(t('errDisconnected'), 'warn'); dropProbe();
+      }
+    });
+    navigator.usb.addEventListener('connect', e => {
+      if (!state.tr && e.device && matchDevice(e.device.productName)){
+        attachTransport(new WebUSBTransport(e.device))
+          .catch(err => log('Auto-connect failed: ' + errText(err), 'warn'));
+      }
+    });
+  }
   if (navigator.hid) navigator.hid.addEventListener('disconnect', e => {
     if (state.tr && state.tr.kind === 'hid' && e.device === state.tr.device){
       log(t('errDisconnected'), 'warn'); dropProbe();

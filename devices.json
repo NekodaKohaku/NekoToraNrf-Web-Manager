@@ -1,5 +1,5 @@
 {
-  "_comment": "裝置註冊表:新增產品只要加一個 entry。probeNames = 燒錄器 USB 產品名稱的開頭(NekoTora_config.h 的 NEKO_USB_PRODUCT_NAME);manifest = latest.json 的路徑(相對本頁或絕對 URL);versionAddr(選填)= 裝置上存版本碼的位址(如 UICR CUSTOMER[0] = 0x10001080,16 進位請寫成十進位數值或省略)。",
+  "_comment": "裝置註冊表:新增產品只要加一個 entry。probeNames = 燒錄器 USB 產品名稱的開頭(較長的放前面);manifest = latest.json 路徑(相對本頁或絕對 URL);usbFilters = 瀏覽器選擇視窗的過濾條件(十進位:0x0D28=3368, 0x0204=516);versionAddr(選填)= 裝置上版本碼位址(如 UICR CUSTOMER[0] = 0x10001080 = 268439680)。",
   "devices": [
     {
       "id": "nekotora",
@@ -10,7 +10,8 @@
         "ja": "NekoTora トラッカー"
       },
       "chip": "nrf52840",
-      "manifest": "firmware/nekotora/latest.json"
+      "manifest": "firmware/nekotora/latest.json",
+      "usbFilters": [{"vendorId": 3368, "productId": 516}]
     }
   ]
 }

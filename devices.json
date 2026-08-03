@@ -1,0 +1,16 @@
+{
+  "_comment": "裝置註冊表:新增產品只要加一個 entry。probeNames = 燒錄器 USB 產品名稱的開頭(NekoTora_config.h 的 NEKO_USB_PRODUCT_NAME);manifest = latest.json 的路徑(相對本頁或絕對 URL);versionAddr(選填)= 裝置上存版本碼的位址(如 UICR CUSTOMER[0] = 0x10001080,16 進位請寫成十進位數值或省略)。",
+  "devices": [
+    {
+      "id": "nekotora",
+      "probeNames": ["NekoTora"],
+      "name": {
+        "zh": "NekoTora 追蹤器",
+        "en": "NekoTora Tracker",
+        "ja": "NekoTora トラッカー"
+      },
+      "chip": "nrf52840",
+      "manifest": "firmware/nekotora/latest.json"
+    }
+  ]
+}

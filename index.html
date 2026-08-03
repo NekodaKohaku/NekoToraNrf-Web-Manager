@@ -1,7 +1,1338 @@
-{
-  "_comment": "由 CI 覆蓋此檔:version 顯示給使用者;versionCode 為 u32 版本碼(0x00MMmmpp,例如 1.2.3 = 66051 = 0x010203),與裝置 versionAddr 的值比對;hex 為相對本檔的韌體檔名。",
-  "version": "0.0.0",
-  "versionCode": 0,
-  "hex": "nekotora-0.0.0.hex",
-  "date": "2026-08-03"
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Firmware Update Tool</title>
+<style>
+:root{
+  --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b;
+  --primary:#2563eb; --primary-hover:#1d4ed8; --border:#e2e8f0;
+  --ok:#16a34a; --warn:#d97706; --err:#dc2626; --warn-bg:#fef3c7; --warn-border:#f59e0b;
+  --log-bg:#0f172a; --log-text:#94a3b8;
 }
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0b1220; --card:#111a2e; --text:#e2e8f0; --muted:#94a3b8;
+    --border:#1e293b; --warn-bg:#3b2f10; --warn-border:#a16207;
+    --log-bg:#020617; --log-text:#7dd3fc;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans TC","Noto Sans JP","PingFang TC","Microsoft JhengHei",Meiryo,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+header{max-width:760px;margin:0 auto;padding:28px 20px 8px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+header h1{margin:0;font-size:24px;font-weight:700}
+header .sub{margin:2px 0 0;color:var(--muted);font-size:14px}
+select#langSel{padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px}
+main{max-width:760px;margin:0 auto;padding:8px 20px 48px}
+.banner{background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:12px;padding:12px 16px;margin:12px 0;font-size:14px}
+.hidden{display:none!important}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px 22px;margin:14px 0;transition:opacity .2s}
+.card.disabled{opacity:.5;pointer-events:none}
+.stepHead{display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.stepNum{flex:none;width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+.stepHead h2{margin:0;font-size:17px;font-weight:600}
+.badge{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--border);color:var(--muted)}
+.badge.ok{background:#dcfce7;color:#166534}
+@media (prefers-color-scheme: dark){ .badge.ok{background:#14532d;color:#bbf7d0} }
+.card p.desc{margin:6px 0 14px;color:var(--muted);font-size:14px}
+.btn{appearance:none;border:none;border-radius:10px;padding:11px 20px;font-size:15px;font-weight:600;cursor:pointer;transition:background .15s}
+.btn.primary{background:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--primary-hover)}
+.btn.primary:disabled{background:var(--border);color:var(--muted);cursor:not-allowed}
+.btn.big{width:100%;padding:14px;font-size:16px}
+.btn.danger{background:var(--err);color:#fff}
+.linklike{background:none;border:none;color:var(--primary);cursor:pointer;font-size:13px;padding:6px 2px;text-decoration:underline}
+.drop{border:2px dashed var(--border);border-radius:12px;padding:30px 16px;text-align:center;color:var(--muted);font-size:14px;cursor:pointer;transition:border-color .15s,background .15s}
+.drop.over{border-color:var(--primary);background:rgba(37,99,235,.06)}
+.fileInfo{margin-top:12px;font-size:14px}
+.fileInfo .fname{font-weight:600}
+.fileInfo .ranges{color:var(--muted);font-size:13px;margin-top:2px;white-space:pre-line}
+.holdBox{display:flex;gap:10px;background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:14px}
+.holdBox .ico{flex:none;font-size:18px}
+.progressWrap{margin-top:4px}
+.stageRow{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;margin-bottom:6px}
+#stageLabel{font-weight:600}
+#pct{color:var(--muted);font-variant-numeric:tabular-nums}
+.bar{height:14px;background:var(--border);border-radius:999px;overflow:hidden}
+.bar>div{height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#3b82f6);transition:width .2s}
+.holdRemind{margin-top:12px;color:var(--err);font-weight:700;font-size:14px;text-align:center;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.result{text-align:center;padding:8px 0 4px}
+.result .mark{font-size:52px;line-height:1.1}
+.result.ok .mark{color:var(--ok)}
+.result.bad .mark{color:var(--err)}
+.result h3{margin:6px 0 4px;font-size:20px}
+.result p{margin:2px 0 14px;color:var(--muted);font-size:14px}
+.result p.errDetail{color:var(--err);font-size:13px;word-break:break-all}
+details.adv{margin:18px 4px}
+details.adv>summary{cursor:pointer;color:var(--muted);font-size:14px;user-select:none}
+.advBody{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-top:10px;font-size:14px}
+.optRow{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
+.optRow select{padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+.logBox{background:var(--log-bg);color:var(--log-text);border-radius:10px;padding:10px 12px;margin-top:10px;height:190px;overflow-y:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.logBox .warn{color:#fbbf24}
+.logBox .err{color:#f87171}
+.logBtns{margin-top:8px;display:flex;gap:10px}
+footer{max-width:760px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 data-i18n="title">Firmware Update Tool</h1>
+    <p class="sub" data-i18n="subtitle"></p>
+  </div>
+  <select id="langSel" aria-label="Language">
+    <option value="zh">繁體中文</option>
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+  </select>
+</header>
+<main>
+  <div id="unsupported" class="banner hidden"></div>
+
+  <!-- Step 1: connect probe -->
+  <section class="card" id="card1">
+    <div class="stepHead"><span class="stepNum">1</span><h2 data-i18n="step1Title"></h2><span id="probeStatus" class="badge"></span></div>
+    <p class="desc" data-i18n="step1Desc"></p>
+    <button id="btnConnect" class="btn primary" data-i18n="connect"></button>
+    <button id="btnConnectHid" class="linklike" data-i18n="connectHid"></button>
+    <p id="probeErr" class="desc hidden" style="color:var(--err)"></p>
+    <p id="devDetected" class="desc hidden" style="font-weight:600;color:var(--ok)"></p>
+  </section>
+
+  <!-- Step 2: firmware file -->
+  <section class="card disabled" id="card2">
+    <div class="stepHead"><span class="stepNum">2</span><h2 data-i18n="step2Title"></h2></div>
+    <div id="srcChoice" class="hidden" style="margin-bottom:10px">
+      <label class="optRow" style="cursor:pointer"><input type="radio" name="fwsrc" id="srcAutoR"><span id="srcAutoLabel"></span></label>
+      <div class="ranges hidden" id="autoRanges" style="color:var(--muted);font-size:13px;margin:0 0 8px 26px;white-space:pre-line"></div>
+      <label class="optRow" style="cursor:pointer"><input type="radio" name="fwsrc" id="srcManualR"><span data-i18n="srcManual"></span></label>
+    </div>
+    <div id="manualArea">
+      <div class="drop" id="drop"><span data-i18n="dropHint"></span></div>
+      <input type="file" id="fileInput" accept=".hex,.ihex" class="hidden">
+      <div class="fileInfo hidden" id="fileInfo">
+        <div class="fname" id="fileName"></div>
+        <div class="ranges" id="fileRanges"></div>
+        <button class="linklike" id="btnReselect" data-i18n="reselect"></button>
+      </div>
+      <p id="fileErr" class="desc hidden" style="color:var(--err)"></p>
+    </div>
+  </section>
+
+  <!-- Step 3: update -->
+  <section class="card disabled" id="card3">
+    <div class="stepHead"><span class="stepNum">3</span><h2 data-i18n="step3Title"></h2></div>
+    <div id="preUpdate">
+      <div class="holdBox"><span class="ico">⚠️</span><span data-i18n="holdWarn"></span></div>
+      <button id="btnStart" class="btn primary big" data-i18n="start"></button>
+    </div>
+    <div id="progressArea" class="hidden">
+      <div class="progressWrap">
+        <div class="stageRow"><span id="stageLabel"></span><span id="pct">0%</span></div>
+        <div class="bar"><div id="barFill"></div></div>
+      </div>
+      <div class="holdRemind" data-i18n="holdDuring"></div>
+    </div>
+    <div id="resultOk" class="result ok hidden">
+      <div class="mark">✓</div>
+      <h3 id="okTitle"></h3>
+      <p id="okHint"></p>
+      <button class="linklike" id="btnAgain" data-i18n="updateAnother"></button>
+    </div>
+    <div id="resultBad" class="result bad hidden">
+      <div class="mark">✕</div>
+      <h3 data-i18n="fail"></h3>
+      <p data-i18n="failHint"></p>
+      <p class="errDetail" id="errDetail"></p>
+      <button class="btn primary" id="btnRetry" data-i18n="retry"></button>
+    </div>
+  </section>
+
+  <!-- Advanced -->
+  <details class="adv" id="advanced">
+    <summary data-i18n="advanced"></summary>
+    <div class="advBody">
+      <div class="optRow"><input type="checkbox" id="optVerify" checked><label for="optVerify" data-i18n="optVerify"></label></div>
+      <div class="optRow">
+        <label for="optErase" data-i18n="optErase"></label>
+        <select id="optErase">
+          <option value="smart" selected data-i18n="eraseSmart"></option>
+          <option value="full" data-i18n="eraseFull"></option>
+          <option value="none" data-i18n="eraseNone"></option>
+        </select>
+      </div>
+      <div class="optRow"><input type="checkbox" id="optForce"><label for="optForce" data-i18n="optForce"></label></div>
+      <div class="optRow">
+        <label for="optClock" data-i18n="optClock"></label>
+        <select id="optClock">
+          <option value="500000">500 kHz</option>
+          <option value="1000000" selected>1 MHz</option>
+          <option value="2000000">2 MHz</option>
+          <option value="4000000">4 MHz</option>
+          <option value="8000000">8 MHz</option>
+        </select>
+      </div>
+      <div class="optRow"><button class="btn danger" id="btnRecover" data-i18n="recover" style="font-size:13px;padding:8px 14px"></button>
+        <span id="recoverMsg" style="font-size:13px;color:var(--warn)"></span></div>
+      <div style="margin-top:14px;font-weight:600" data-i18n="logTitle"></div>
+      <div class="logBox" id="log"></div>
+      <div class="logBtns">
+        <button class="linklike" id="btnLogDl" data-i18n="logDownload"></button>
+        <button class="linklike" id="btnLogClear" data-i18n="logClear"></button>
+      </div>
+    </div>
+  </details>
+</main>
+<footer><span data-i18n="footerNote"></span></footer>
+
+<script>
+'use strict';
+/* =====================================================================
+ *  nRF52840 Web Firmware Updater
+ *  Browser -> WebUSB / WebHID -> CMSIS-DAP probe -> SWD -> nRF52840 NVMC
+ *  No installed software required. Host on GitHub Pages (HTTPS).
+ * ===================================================================== */
+
+/* ------------------------- configuration --------------------------- */
+const CONFIG = {
+  deviceName: 'nRF52840 Tracker',      // shown in the page subtitle
+  flashBase: 0x00000000,
+  flashSize: 0x100000,                 // 1 MB
+  pageSize: 4096,
+  uicrBase: 0x10001000,
+  uicrSize: 0x1000,
+  expectedPart: 0x52840,               // FICR.INFO.PART
+  blockIfPartMismatch: false,          // true = refuse to flash non-nRF52840
+  defaultSwdClockHz: 1000000,
+  devicesUrl: 'devices.json',          // device registry (same-origin); falls back to DEFAULT_DEVICES
+};
+
+/* Fallback registry used when devices.json cannot be fetched (e.g. local testing).
+ * To add a new product, edit devices.json — no code changes needed.
+ *   probeNames  : USB product-name prefixes of the bundled CMSIS-DAP probe
+ *   manifest    : URL (relative to this page, or absolute) of latest.json
+ *   versionAddr : optional u32 address holding the firmware version code
+ *                 (e.g. UICR CUSTOMER[0] = 0x10001080); enables up-to-date check */
+const DEFAULT_DEVICES = {
+  devices: [
+    {
+      id: 'nekotora',
+      probeNames: ['NekoTora'],
+      name: {zh: 'NekoTora 追蹤器', en: 'NekoTora Tracker', ja: 'NekoTora トラッカー'},
+      chip: 'nrf52840',
+      manifest: 'firmware/nekotora/latest.json',
+    },
+  ],
+};
+
+/* --------------------------- i18n ---------------------------------- */
+const I18N = {
+zh: {
+  title:'韌體更新工具',
+  subtitle:'{device} 網頁更新程式',
+  unsupported:'此瀏覽器不支援 WebUSB / WebHID,請改用電腦版 Chrome 或 Edge 開啟本頁。',
+  step1Title:'連接裝置',
+  step1Desc:'請將燒錄器(CMSIS-DAP)與追蹤器接上電腦 USB,按住裝置按鈕確保供電,然後點「連接裝置」,在跳出的視窗中選擇燒錄器。',
+  connect:'連接裝置', connectHid:'無法連接?改用 HID 模式',
+  probeNone:'未連接', probeConnected:'已連接:{name}',
+  step2Title:'選擇韌體檔案',
+  dropHint:'將 .hex 檔案拖曳到這裡,或點擊選擇檔案',
+  fileInfo:'{name}({kb} KB)',
+  flashInfo:'Flash:{kb} KB,{pages} 個分頁({range})',
+  uicrInfo:'UICR:{words} 個字組',
+  reselect:'重新選擇檔案',
+  step3Title:'開始更新',
+  holdWarn:'重要:更新全程請「持續按住」裝置上的按鈕,直到畫面顯示更新完成。中途放開會使裝置斷電、更新失敗。',
+  start:'我已按住按鈕,開始更新',
+  holdDuring:'更新中 — 請繼續按住按鈕,不要拔除 USB!',
+  stageConnect:'正在連線晶片…', stageErase:'正在抹除舊韌體…', stageProgram:'正在寫入新韌體…',
+  stageVerify:'正在驗證資料…', stageReset:'正在重新啟動裝置…',
+  success:'更新完成!', successHint:'現在可以放開按鈕了,裝置將自動重新啟動。',
+  updateAnother:'更新另一台裝置',
+  fail:'更新失敗',
+  failHint:'請放開按鈕,將 USB 拔除後重新插入;再次按住按鈕後點「再試一次」。若持續失敗,請展開下方詳細記錄查看原因。',
+  retry:'再試一次',
+  advanced:'進階選項與詳細記錄',
+  optVerify:'寫入後驗證(建議開啟)',
+  optClock:'SWD 速度:',
+  recover:'解除晶片保護(Recover,會抹除全部資料)',
+  recoverConfirm:'此操作會抹除整顆晶片(含 UICR)!再按一次以確認執行。',
+  recoverDone:'Recover 完成。請將裝置完全斷電後重新上電,再重新燒錄韌體。',
+  recoverFailed:'Recover 失敗:{msg}',
+  logTitle:'詳細記錄', logDownload:'下載記錄', logClear:'清除',
+  footerNote:'需使用電腦版 Chrome 或 Edge(WebUSB / WebHID)。所有通訊都在你的電腦與裝置之間進行,韌體檔案不會上傳到任何伺服器。',
+  autoDetected:'偵測到裝置:{name}',
+  autoLoading:'正在取得最新韌體資訊…',
+  autoFailed:'無法自動取得最新韌體,請手動選擇檔案',
+  srcAuto:'使用最新版本:{v}',
+  srcManual:'手動選擇檔案',
+  optErase:'抹除模式:',
+  eraseSmart:'標準(只抹除韌體覆蓋的範圍)',
+  eraseFull:'整顆抹除(含 UICR)',
+  eraseNone:'不抹除(進階,直接寫入)',
+  optForce:'版本相同時仍強制更新',
+  upToDateTitle:'已是最新版本',
+  upToDateHint:'裝置韌體({v})已是最新,不需要更新。現在可以放開按鈕。',
+  curVersion:'裝置目前版本:{v}',
+  errNoProbe:'請先連接燒錄器', errNoFile:'請先選擇韌體檔案',
+  errHexFormat:'韌體檔第 {line} 行格式錯誤,請確認是 Intel HEX(.hex)檔案',
+  errHexChecksum:'韌體檔第 {line} 行 checksum 錯誤,檔案可能已損壞',
+  errHexEmpty:'韌體檔內沒有資料', errHexOverlap:'韌體檔內含重疊的位址區段',
+  errRange:'韌體位址 {range} 超出 nRF52840 範圍,可能選錯了檔案',
+  errNotDapUsb:'選擇的裝置沒有 CMSIS-DAP 介面。若是較舊的燒錄器,請改用「HID 模式」連接',
+  errUsbOpen:'無法開啟 USB 裝置(可能被其他程式佔用,請關閉 pyOCD / OpenOCD 等程式後重試)',
+  errNoWebUsb:'此瀏覽器不支援 WebUSB', errNoWebHid:'此瀏覽器不支援 WebHID',
+  errTimeout:'燒錄器沒有回應(逾時)', errDapProto:'燒錄器通訊協定錯誤',
+  errSwdConnect:'燒錄器不支援 SWD 模式',
+  errSwdFail:'SWD 通訊失敗(ACK={ack})。請確認 SWD 接線,以及裝置是否有電(按鈕是否持續按住?)',
+  errPowerUp:'無法啟動晶片除錯介面。請確認裝置有電(按住按鈕)且 SWD 接線正確',
+  errNvmcTimeout:'Flash 操作逾時',
+  errVerify:'驗證失敗:位址 {addr} 應為 {exp},實際為 {got}',
+  errProtected:'無法讀取晶片,可能已啟用讀取保護(APPROTECT)。可在進階選項執行「解除晶片保護」後重試(會抹除全部資料)',
+  errPart:'晶片型號不符,不是 nRF52840',
+  warnPartMismatch:'注意:晶片 PART={part},與 nRF52840 不符',
+  errDisconnected:'裝置已中斷連線', errUsbXfer:'USB 傳輸失敗',
+},
+en: {
+  title:'Firmware Update Tool',
+  subtitle:'Web updater for {device}',
+  unsupported:'This browser does not support WebUSB / WebHID. Please open this page in desktop Chrome or Edge.',
+  step1Title:'Connect the device',
+  step1Desc:'Plug the CMSIS-DAP programmer and the tracker into USB, hold the device button to keep it powered, then click "Connect" and pick the programmer in the popup.',
+  connect:'Connect', connectHid:'Trouble connecting? Try HID mode',
+  probeNone:'Not connected', probeConnected:'Connected: {name}',
+  step2Title:'Select firmware file',
+  dropHint:'Drag & drop the .hex file here, or click to browse',
+  fileInfo:'{name} ({kb} KB)',
+  flashInfo:'Flash: {kb} KB, {pages} pages ({range})',
+  uicrInfo:'UICR: {words} words',
+  reselect:'Choose a different file',
+  step3Title:'Start update',
+  holdWarn:'Important: keep the device button HELD DOWN during the whole update, until the screen says it is complete. Releasing it cuts power and the update will fail.',
+  start:'I am holding the button — start update',
+  holdDuring:'Updating — keep holding the button, do not unplug USB!',
+  stageConnect:'Connecting to chip…', stageErase:'Erasing old firmware…', stageProgram:'Writing new firmware…',
+  stageVerify:'Verifying…', stageReset:'Restarting device…',
+  success:'Update complete!', successHint:'You can release the button now. The device will restart automatically.',
+  updateAnother:'Update another device',
+  fail:'Update failed',
+  failHint:'Release the button, unplug and replug USB, hold the button again, then click "Try again". If it keeps failing, check the log below.',
+  retry:'Try again',
+  advanced:'Advanced options & log',
+  optVerify:'Verify after writing (recommended)',
+  optClock:'SWD clock:',
+  recover:'Unlock chip (Recover — erases everything)',
+  recoverConfirm:'This will erase the ENTIRE chip including UICR! Click once more to confirm.',
+  recoverDone:'Recover done. Fully power-cycle the device, then flash the firmware again.',
+  recoverFailed:'Recover failed: {msg}',
+  logTitle:'Log', logDownload:'Download log', logClear:'Clear',
+  footerNote:'Requires desktop Chrome or Edge (WebUSB / WebHID). Everything runs locally between your computer and the device; the firmware file is never uploaded to any server.',
+  autoDetected:'Device detected: {name}',
+  autoLoading:'Fetching latest firmware info…',
+  autoFailed:'Could not fetch the latest firmware — please select a file manually',
+  srcAuto:'Use latest version: {v}',
+  srcManual:'Select a file manually',
+  optErase:'Erase mode:',
+  eraseSmart:'Standard (erase only areas covered by the firmware)',
+  eraseFull:'Full chip erase (including UICR)',
+  eraseNone:'No erase (advanced — write directly)',
+  optForce:'Force update even if the version is the same',
+  upToDateTitle:'Already up to date',
+  upToDateHint:'The device firmware ({v}) is already the latest — no update needed. You can release the button now.',
+  curVersion:'Current device version: {v}',
+  errNoProbe:'Connect a programmer first', errNoFile:'Select a firmware file first',
+  errHexFormat:'Bad format at line {line} — is this an Intel HEX (.hex) file?',
+  errHexChecksum:'Checksum error at line {line} — the file may be corrupted',
+  errHexEmpty:'The firmware file contains no data', errHexOverlap:'The firmware file contains overlapping address ranges',
+  errRange:'Firmware address range {range} is outside the nRF52840 — wrong file?',
+  errNotDapUsb:'The selected device has no CMSIS-DAP interface. For older probes, try "HID mode".',
+  errUsbOpen:'Could not open the USB device (it may be in use — close pyOCD / OpenOCD and retry)',
+  errNoWebUsb:'This browser does not support WebUSB', errNoWebHid:'This browser does not support WebHID',
+  errTimeout:'The programmer did not respond (timeout)', errDapProto:'Programmer protocol error',
+  errSwdConnect:'The programmer does not support SWD',
+  errSwdFail:'SWD communication failed (ACK={ack}). Check the SWD wiring and that the device is powered (button still held?)',
+  errPowerUp:'Could not power up the debug interface. Check that the device is powered (hold the button) and SWD wiring is correct',
+  errNvmcTimeout:'Flash operation timed out',
+  errVerify:'Verification failed at {addr}: expected {exp}, got {got}',
+  errProtected:'Cannot read the chip — access port protection (APPROTECT) may be enabled. Use "Unlock chip" in Advanced options (erases everything), then retry.',
+  errPart:'Chip is not an nRF52840',
+  warnPartMismatch:'Warning: chip PART={part}, not an nRF52840',
+  errDisconnected:'Device disconnected', errUsbXfer:'USB transfer failed',
+},
+ja: {
+  title:'ファームウェア更新ツール',
+  subtitle:'{device} 用 Web 更新ツール',
+  unsupported:'このブラウザは WebUSB / WebHID に対応していません。パソコン版の Chrome または Edge でこのページを開いてください。',
+  step1Title:'機器を接続',
+  step1Desc:'書き込み器(CMSIS-DAP)とトラッカーをパソコンの USB に接続し、デバイスのボタンを押して電源を維持したまま「接続」をクリックし、表示された一覧から書き込み器を選択してください。',
+  connect:'接続', connectHid:'接続できない場合は HID モード',
+  probeNone:'未接続', probeConnected:'接続済み:{name}',
+  step2Title:'ファームウェアを選択',
+  dropHint:'.hex ファイルをここにドラッグ&ドロップ、またはクリックして選択',
+  fileInfo:'{name}({kb} KB)',
+  flashInfo:'Flash:{kb} KB、{pages} ページ({range})',
+  uicrInfo:'UICR:{words} ワード',
+  reselect:'別のファイルを選択',
+  step3Title:'更新を開始',
+  holdWarn:'重要:更新が完了と表示されるまで、デバイスのボタンを押し続けてください。途中で離すと電源が切れ、更新に失敗します。',
+  start:'ボタンを押したまま、更新を開始',
+  holdDuring:'更新中 — ボタンを押し続けてください。USB を抜かないでください!',
+  stageConnect:'チップに接続中…', stageErase:'旧ファームウェアを消去中…', stageProgram:'新ファームウェアを書き込み中…',
+  stageVerify:'検証中…', stageReset:'デバイスを再起動中…',
+  success:'更新が完了しました!', successHint:'ボタンを離してください。デバイスは自動的に再起動します。',
+  updateAnother:'別のデバイスを更新',
+  fail:'更新に失敗しました',
+  failHint:'ボタンを離し、USB を抜き差ししてから、再度ボタンを押したまま「もう一度試す」をクリックしてください。失敗が続く場合は下のログをご確認ください。',
+  retry:'もう一度試す',
+  advanced:'詳細設定とログ',
+  optVerify:'書き込み後に検証する(推奨)',
+  optClock:'SWD クロック:',
+  recover:'チップ保護を解除(Recover・全データ消去)',
+  recoverConfirm:'チップ全体(UICR を含む)が消去されます!実行するにはもう一度クリックしてください。',
+  recoverDone:'Recover 完了。デバイスの電源を完全に切って入れ直し、ファームウェアを書き込み直してください。',
+  recoverFailed:'Recover 失敗:{msg}',
+  logTitle:'ログ', logDownload:'ログを保存', logClear:'クリア',
+  footerNote:'パソコン版 Chrome または Edge(WebUSB / WebHID)が必要です。通信はすべてお使いのパソコンとデバイスの間で行われ、ファームウェアがサーバーに送信されることはありません。',
+  autoDetected:'デバイスを検出:{name}',
+  autoLoading:'最新ファームウェア情報を取得中…',
+  autoFailed:'最新ファームウェアを取得できませんでした。手動でファイルを選択してください',
+  srcAuto:'最新バージョンを使用:{v}',
+  srcManual:'手動でファイルを選択',
+  optErase:'消去モード:',
+  eraseSmart:'標準(ファームウェアが使用する範囲のみ消去)',
+  eraseFull:'チップ全体を消去(UICR を含む)',
+  eraseNone:'消去しない(上級者向け・直接書き込み)',
+  optForce:'同じバージョンでも強制的に更新する',
+  upToDateTitle:'すでに最新です',
+  upToDateHint:'デバイスのファームウェア({v})は最新です。更新は不要です。ボタンを離してください。',
+  curVersion:'デバイスの現在のバージョン:{v}',
+  errNoProbe:'先に書き込み器を接続してください', errNoFile:'先にファームウェアファイルを選択してください',
+  errHexFormat:'{line} 行目の形式が不正です。Intel HEX(.hex)ファイルか確認してください',
+  errHexChecksum:'{line} 行目のチェックサムが不正です。ファイルが破損している可能性があります',
+  errHexEmpty:'ファームウェアファイルにデータがありません', errHexOverlap:'ファームウェアファイルにアドレスの重複があります',
+  errRange:'アドレス範囲 {range} は nRF52840 の範囲外です。ファイルが正しいか確認してください',
+  errNotDapUsb:'選択されたデバイスに CMSIS-DAP インターフェースがありません。古い書き込み器の場合は「HID モード」をお試しください',
+  errUsbOpen:'USB デバイスを開けません(他のソフトが使用中の可能性があります。pyOCD / OpenOCD 等を終了して再試行してください)',
+  errNoWebUsb:'このブラウザは WebUSB に対応していません', errNoWebHid:'このブラウザは WebHID に対応していません',
+  errTimeout:'書き込み器が応答しません(タイムアウト)', errDapProto:'書き込み器のプロトコルエラー',
+  errSwdConnect:'書き込み器が SWD に対応していません',
+  errSwdFail:'SWD 通信に失敗しました(ACK={ack})。配線と、デバイスの電源(ボタンを押し続けているか)を確認してください',
+  errPowerUp:'デバッグインターフェースを起動できません。デバイスの電源(ボタン)と SWD 配線を確認してください',
+  errNvmcTimeout:'Flash 操作がタイムアウトしました',
+  errVerify:'検証失敗:アドレス {addr} 期待値 {exp}、実際 {got}',
+  errProtected:'チップを読み取れません。読み出し保護(APPROTECT)が有効の可能性があります。詳細設定の「チップ保護を解除」を実行後(全データ消去)、再試行してください',
+  errPart:'チップが nRF52840 ではありません',
+  warnPartMismatch:'警告:チップ PART={part}(nRF52840 ではありません)',
+  errDisconnected:'デバイスが切断されました', errUsbXfer:'USB 転送に失敗しました',
+},
+};
+
+let lang = 'en';
+function t(key, params){
+  let s = (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+  const p = Object.assign({device: CONFIG.deviceName}, params || {});
+  for (const k in p) s = s.split('{'+k+'}').join(p[k]);
+  return s;
+}
+
+/* ------------------------- small utils ------------------------------ */
+/*TEST:BEGIN*/
+function mkErr(key, params){ const e = new Error(key); e.i18nKey = key; e.i18nParams = params; return e; }
+const hex = (n, w=8) => '0x' + (n >>> 0).toString(16).toUpperCase().padStart(w, '0');
+const le32 = n => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+
+/* ----------------------- Intel HEX parser --------------------------- */
+function parseIntelHex(text){
+  let upper = 0; const raw = []; let cur = null;
+  const lines = text.split(/\r?\n/);
+  for (let li = 0; li < lines.length; li++){
+    const line = lines[li].trim();
+    if (!line) continue;
+    if (line[0] !== ':' || (line.length - 1) % 2 !== 0) throw mkErr('errHexFormat', {line: li + 1});
+    const b = new Uint8Array((line.length - 1) / 2);
+    for (let i = 0; i < b.length; i++){
+      const v = parseInt(line.substr(1 + i * 2, 2), 16);
+      if (Number.isNaN(v)) throw mkErr('errHexFormat', {line: li + 1});
+      b[i] = v;
+    }
+    let sum = 0; for (const v of b) sum = (sum + v) & 0xFF;
+    if (sum !== 0) throw mkErr('errHexChecksum', {line: li + 1});
+    const len = b[0], addr = (b[1] << 8) | b[2], type = b[3];
+    if (b.length !== len + 5) throw mkErr('errHexFormat', {line: li + 1});
+    const data = b.subarray(4, 4 + len);
+    if (type === 0){
+      const abs = (upper + addr) >>> 0;
+      if (cur && cur.start + cur.bytes.length === abs){ for (const v of data) cur.bytes.push(v); }
+      else { cur = {start: abs, bytes: Array.from(data)}; raw.push(cur); }
+    } else if (type === 1){ break; }
+    else if (type === 4){ upper = (((b[4] << 8) | b[5]) * 0x10000) >>> 0; }
+    else if (type === 2){ upper = (((b[4] << 8) | b[5]) * 16) >>> 0; }
+    else if (type === 3 || type === 5){ /* start address records — ignored */ }
+    else throw mkErr('errHexFormat', {line: li + 1});
+  }
+  if (!raw.length) throw mkErr('errHexEmpty');
+  raw.sort((a, b2) => a.start - b2.start);
+  // merge segments separated by small gaps (fill 0xFF) so padded words never overlap
+  const merged = [];
+  for (const s of raw){
+    const last = merged[merged.length - 1];
+    if (last){
+      const lastEnd = last.start + last.bytes.length;
+      if (s.start < lastEnd) throw mkErr('errHexOverlap');
+      if (s.start - lastEnd <= 8){
+        for (let i = lastEnd; i < s.start; i++) last.bytes.push(0xFF);
+        for (const v of s.bytes) last.bytes.push(v);
+        continue;
+      }
+    }
+    merged.push(s);
+  }
+  // word-align each segment (pad with 0xFF)
+  return merged.map(s => {
+    const start = s.start & ~3;
+    const end = (s.start + s.bytes.length + 3) & ~3;
+    const buf = new Uint8Array(end - start).fill(0xFF);
+    buf.set(Uint8Array.from(s.bytes), s.start - start);
+    const dv = new DataView(buf.buffer);
+    const words = new Uint32Array(buf.length >> 2);
+    for (let i = 0; i < words.length; i++) words[i] = dv.getUint32(i * 4, true);
+    return {start, data: buf, words};
+  });
+}
+
+function classifySegments(segs){
+  const flash = [], uicr = [];
+  for (const s of segs){
+    const end = s.start + s.data.length;
+    if (s.start >= CONFIG.flashBase && end <= CONFIG.flashBase + CONFIG.flashSize) flash.push(s);
+    else if (s.start >= CONFIG.uicrBase && end <= CONFIG.uicrBase + CONFIG.uicrSize) uicr.push(s);
+    else throw mkErr('errRange', {range: hex(s.start) + '–' + hex(end)});
+  }
+  return {flash, uicr};
+}
+/*TEST:END*/
+
+/* --------------------------- logging -------------------------------- */
+const logEl = document.getElementById('log');
+const logLines = [];
+function log(msg, cls){
+  const ts = new Date().toTimeString().slice(0, 8) + '.' + String(new Date().getMilliseconds()).padStart(3, '0');
+  const line = '[' + ts + '] ' + msg;
+  logLines.push(line);
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = line;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function errText(e){
+  if (e && e.i18nKey) return t(e.i18nKey, e.i18nParams);
+  return String((e && e.message) || e);
+}
+
+/* ------------------------- transports ------------------------------- */
+class WebUSBTransport {
+  constructor(device){ this.device = device; this.packetSize = 64; this.kind = 'usb'; }
+  get name(){ return this.device.productName || 'CMSIS-DAP (USB)'; }
+  async open(){
+    const d = this.device;
+    try { await d.open(); } catch (e){ throw mkErr('errUsbOpen'); }
+    if (!d.configuration){ try { await d.selectConfiguration(1); } catch (e){ throw mkErr('errUsbOpen'); } }
+    let found = null;
+    for (const iface of d.configuration.interfaces){
+      for (const alt of iface.alternates){
+        if (alt.interfaceClass === 0xFF){
+          const epOut = alt.endpoints.find(e => e.direction === 'out' && e.type === 'bulk');
+          const epIn  = alt.endpoints.find(e => e.direction === 'in'  && e.type === 'bulk');
+          if (epOut && epIn){ found = {num: iface.interfaceNumber, epOut, epIn}; break; }
+        }
+      }
+      if (found) break;
+    }
+    if (!found){ try { await d.close(); } catch (e){} throw mkErr('errNotDapUsb'); }
+    try { await d.claimInterface(found.num); } catch (e){ throw mkErr('errUsbOpen'); }
+    this.epOut = found.epOut.endpointNumber;
+    this.epIn = found.epIn.endpointNumber;
+    this.packetSize = Math.max(64, found.epOut.packetSize || 64);
+    this.readLen = Math.max(512, this.packetSize);
+  }
+  setPacketSize(n){ this.packetSize = n; this.readLen = Math.max(512, n); }
+  async xfer(data){
+    let res;
+    try {
+      await this.device.transferOut(this.epOut, data);
+      res = await this.device.transferIn(this.epIn, this.readLen);
+    } catch (e){ throw mkErr('errUsbXfer'); }
+    if (res.status !== 'ok') throw mkErr('errUsbXfer');
+    return new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
+  }
+  async close(){ try { await this.device.close(); } catch (e){} }
+}
+
+class WebHIDTransport {
+  constructor(device){ this.device = device; this.packetSize = 64; this.kind = 'hid'; this._q = []; this._w = []; }
+  get name(){ return this.device.productName || 'CMSIS-DAP (HID)'; }
+  async open(){
+    await this.device.open();
+    let size = 64;
+    try {
+      for (const col of (this.device.collections || [])){
+        for (const rep of (col.outputReports || [])){
+          for (const item of (rep.items || [])){
+            if (item.reportCount && item.reportSize){
+              size = Math.ceil(item.reportCount * item.reportSize / 8);
+            }
+          }
+        }
+      }
+    } catch (e){}
+    this.packetSize = Math.min(1024, Math.max(8, size));
+    this._onReport = ev => {
+      const data = new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength);
+      const w = this._w.shift();
+      if (w) w(data); else this._q.push(data);
+    };
+    this.device.addEventListener('inputreport', this._onReport);
+  }
+  setPacketSize(n){ /* HID packet size is fixed by the report descriptor */ }
+  _recv(ms){
+    if (this._q.length) return Promise.resolve(this._q.shift());
+    return new Promise((resolve, reject) => {
+      const w = d => { clearTimeout(tm); resolve(d); };
+      const tm = setTimeout(() => {
+        const i = this._w.indexOf(w);
+        if (i >= 0) this._w.splice(i, 1);
+        reject(mkErr('errTimeout'));
+      }, ms);
+      this._w.push(w);
+    });
+  }
+  async xfer(data){
+    const out = new Uint8Array(this.packetSize);
+    out.set(data.subarray(0, Math.min(data.length, this.packetSize)));
+    try { await this.device.sendReport(0, out); } catch (e){ throw mkErr('errUsbXfer'); }
+    return this._recv(5000);
+  }
+  async close(){
+    try { this.device.removeEventListener('inputreport', this._onReport); } catch (e){}
+    try { await this.device.close(); } catch (e){}
+  }
+}
+
+/* ------------------------- CMSIS-DAP -------------------------------- */
+const CMD = {INFO:0x00, CONNECT:0x02, DISCONNECT:0x03, TRANSFER_CONFIGURE:0x04,
+             TRANSFER:0x05, TRANSFER_BLOCK:0x06, WRITE_ABORT:0x08,
+             SWJ_CLOCK:0x11, SWJ_SEQUENCE:0x12};
+
+class DAP {
+  constructor(tr){ this.tr = tr; this.packetSize = 64; }
+  async cmd(bytes){
+    const req = (bytes instanceof Uint8Array) ? bytes : Uint8Array.from(bytes);
+    const resp = await this.tr.xfer(req);
+    if (resp[0] !== req[0]) throw mkErr('errDapProto');
+    return resp;
+  }
+  get maxBlockWords(){ return Math.max(1, (this.packetSize - 8) >> 2); }
+  async init(clockHz){
+    // negotiate packet size
+    try {
+      const r = await this.cmd([CMD.INFO, 0xFF]);
+      if (r[1] === 2){
+        const ps = r[2] | (r[3] << 8);
+        if (ps >= 64 && ps <= 4096){
+          this.packetSize = (this.tr.kind === 'hid') ? Math.min(ps, this.tr.packetSize) : ps;
+          this.tr.setPacketSize(this.packetSize);
+        }
+      }
+    } catch (e){ log('DAP_Info(packet size) failed: ' + errText(e), 'warn'); }
+    log('DAP packet size: ' + this.packetSize + ' bytes (' + this.tr.kind.toUpperCase() + ')');
+    const c = await this.cmd([CMD.CONNECT, 1]);           // 1 = SWD
+    if (c[1] !== 1) throw mkErr('errSwdConnect');
+    await this.cmd([CMD.SWJ_CLOCK, ...le32(clockHz)]);
+    // idle cycles 0, WAIT retries 0xFFFF (flash writes stall the bus), match retries 0
+    await this.cmd([CMD.TRANSFER_CONFIGURE, 0x00, 0xFF, 0xFF, 0x00, 0x00]);
+    log('SWD clock: ' + (clockHz / 1000000) + ' MHz');
+  }
+  async swjSeq(bits, bytes){ await this.cmd([CMD.SWJ_SEQUENCE, bits & 0xFF, ...bytes]); }
+  async transfer(items){
+    const buf = [CMD.TRANSFER, 0x00, items.length];
+    let reads = 0;
+    for (const it of items){
+      buf.push(it.req);
+      if (it.req & 0x02) reads++;
+      else buf.push(...le32(it.val >>> 0));
+    }
+    const r = await this.cmd(buf);
+    const count = r[1], ack = r[2] & 0x07;
+    if (count !== items.length || ack !== 1) throw mkErr('errSwdFail', {ack: ack, count: count});
+    const dv = new DataView(r.buffer, r.byteOffset, r.byteLength);
+    const vals = [];
+    for (let i = 0; i < reads; i++) vals.push(dv.getUint32(3 + i * 4, true));
+    return vals;
+  }
+  async transferBlockWrite(req, words, off, n){
+    const buf = new Uint8Array(5 + n * 4);
+    buf[0] = CMD.TRANSFER_BLOCK; buf[1] = 0; buf[2] = n & 0xFF; buf[3] = (n >> 8) & 0xFF; buf[4] = req;
+    const dv = new DataView(buf.buffer);
+    for (let i = 0; i < n; i++) dv.setUint32(5 + i * 4, words[off + i], true);
+    const r = await this.cmd(buf);
+    const cnt = r[1] | (r[2] << 8), ack = r[3] & 0x07;
+    if (cnt !== n || ack !== 1) throw mkErr('errSwdFail', {ack: ack, count: cnt});
+  }
+  async transferBlockRead(req, n){
+    const r = await this.cmd([CMD.TRANSFER_BLOCK, 0x00, n & 0xFF, (n >> 8) & 0xFF, req]);
+    const cnt = r[1] | (r[2] << 8), ack = r[3] & 0x07;
+    if (cnt !== n || ack !== 1) throw mkErr('errSwdFail', {ack: ack, count: cnt});
+    const dv = new DataView(r.buffer, r.byteOffset, r.byteLength);
+    const out = new Uint32Array(n);
+    for (let i = 0; i < n; i++) out[i] = dv.getUint32(4 + i * 4, true);
+    return out;
+  }
+  async disconnect(){ try { await this.cmd([CMD.DISCONNECT]); } catch (e){} }
+}
+
+/* --------------------- SWD / MEM-AP target -------------------------- */
+// transfer request byte: bit0 APnDP, bit1 RnW, bits[3:2] = A[3:2]
+const RQ = {
+  DP_R: a => 0x02 | (a & 0x0C),
+  DP_W: a => 0x00 | (a & 0x0C),
+  AP_R: a => 0x03 | (a & 0x0C),
+  AP_W: a => 0x01 | (a & 0x0C),
+};
+
+class Target {
+  constructor(dap){ this.dap = dap; this.sel = -1; }
+  async dpRead(a){ return (await this.dap.transfer([{req: RQ.DP_R(a)}]))[0]; }
+  async dpWrite(a, v){ await this.dap.transfer([{req: RQ.DP_W(a), val: v}]); }
+  async select(ap, bank){
+    const s = ((ap & 0xFF) << 24) | ((bank & 0xF) << 4);
+    if (s !== this.sel){ await this.dpWrite(0x8, s); this.sel = s; }
+  }
+  async apRead(ap, reg){
+    await this.select(ap, reg >> 4);
+    return (await this.dap.transfer([{req: RQ.AP_R(reg & 0x0C)}]))[0];
+  }
+  async apWrite(ap, reg, v){
+    await this.select(ap, reg >> 4);
+    await this.dap.transfer([{req: RQ.AP_W(reg & 0x0C), val: v}]);
+  }
+  async dpInit(){
+    // line reset (56 x 1), JTAG->SWD (0x9E 0xE7), line reset, >=2 idle cycles
+    await this.dap.swjSeq(136, [0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0x9E,0xE7,
+                                0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0x00]);
+    const idr = await this.dpRead(0x0);
+    log('DPIDR = ' + hex(idr));
+    await this.dpWrite(0x0, 0x0000001E);   // ABORT: clear all sticky errors
+    this.sel = -1;
+    await this.select(0, 0);
+    await this.dpWrite(0x4, 0x50000000);   // CSYSPWRUPREQ | CDBGPWRUPREQ
+    let ok = false;
+    for (let i = 0; i < 100 && !ok; i++){
+      try {
+        const s = await this.dpRead(0x4);
+        if (((s & 0xA0000000) >>> 0) === 0xA0000000) ok = true;
+      } catch (e){ try { await this.dpWrite(0x0, 0x1E); } catch (e2){} }
+    }
+    if (!ok) throw mkErr('errPowerUp');
+    log('Debug power-up OK');
+  }
+  async memInit(){
+    // AHB-AP (AP 0): CSW = word size, auto-increment single
+    await this.apWrite(0, 0x00, 0x23000052);
+  }
+  async read32(addr){
+    await this.select(0, 0);
+    const v = await this.dap.transfer([{req: RQ.AP_W(0x04), val: addr}, {req: RQ.AP_R(0x0C)}]);
+    return v[0];
+  }
+  async write32(addr, val){
+    await this.select(0, 0);
+    await this.dap.transfer([{req: RQ.AP_W(0x04), val: addr}, {req: RQ.AP_W(0x0C), val: val}]);
+  }
+  // block ops: chunk on TAR auto-increment (1 KB) boundaries and DAP packet size
+  async writeBlock(addr, words, onChunk){
+    let i = 0;
+    while (i < words.length){
+      const room = (0x400 - (addr & 0x3FF)) >> 2;
+      const n = Math.min(room, this.dap.maxBlockWords, words.length - i);
+      await this.select(0, 0);
+      await this.dap.transfer([{req: RQ.AP_W(0x04), val: addr}]);
+      await this.dap.transferBlockWrite(RQ.AP_W(0x0C), words, i, n);
+      addr += n * 4; i += n;
+      if (onChunk) onChunk(i, words.length);
+    }
+  }
+  async readBlock(addr, count, onChunk){
+    const out = new Uint32Array(count);
+    let i = 0;
+    while (i < count){
+      const room = (0x400 - (addr & 0x3FF)) >> 2;
+      const n = Math.min(room, this.dap.maxBlockWords, count - i);
+      await this.select(0, 0);
+      await this.dap.transfer([{req: RQ.AP_W(0x04), val: addr}]);
+      out.set(await this.dap.transferBlockRead(RQ.AP_R(0x0C), n), i);
+      addr += n * 4; i += n;
+      if (onChunk) onChunk(i, count);
+    }
+    return out;
+  }
+}
+
+/* --------------------- nRF52840 flash logic ------------------------- */
+const NRF = {
+  NVMC_READY:     0x4001E400,
+  NVMC_CONFIG:    0x4001E504,
+  NVMC_ERASEPAGE: 0x4001E508,
+  NVMC_ERASEALL:  0x4001E50C,
+  NVMC_ERASEUICR: 0x4001E514,
+  FICR_DEVICEID0: 0x10000060,
+  FICR_DEVICEID1: 0x10000064,
+  FICR_PART:      0x10000100,
+  FICR_VARIANT:   0x10000104,
+  DHCSR: 0xE000EDF0,
+  AIRCR: 0xE000ED0C,
+};
+
+async function pollNvmcReady(tgt, timeoutMs){
+  const dl = Date.now() + timeoutMs;
+  while (Date.now() < dl){
+    if ((await tgt.read32(NRF.NVMC_READY)) & 1) return;
+  }
+  throw mkErr('errNvmcTimeout');
+}
+
+/* --------------------------- UI state ------------------------------- */
+const $ = id => document.getElementById(id);
+const state = {
+  tr: null, dap: null, probeName: '',
+  registry: DEFAULT_DEVICES, device: null,
+  source: 'manual',                    // 'auto' (latest from manifest) | 'manual' (uploaded file)
+  autoFw: null, autoStatus: 'none',    // none | loading | ok | fail
+  manualFw: null,
+  updating: false, stageKey: '', lastErr: null,
+  resultKind: null, upToDateV: '',
+  recoverArmed: false,
+};
+function activeFw(){ return state.source === 'auto' ? state.autoFw : state.manualFw; }
+function devName(dev){
+  if (!dev) return '';
+  return typeof dev.name === 'string' ? dev.name : (dev.name[lang] || dev.name.en || dev.id);
+}
+function verStr(code){
+  if (code === undefined || code === null || code === 0xFFFFFFFF) return '—';
+  return 'v' + ((code >>> 16) & 0xFF) + '.' + ((code >>> 8) & 0xFF) + '.' + (code & 0xFF);
+}
+
+function setBar(frac){
+  const p = Math.round(Math.min(1, Math.max(0, frac)) * 100);
+  $('barFill').style.width = p + '%';
+  $('pct').textContent = p + '%';
+}
+let PH = {};
+function makePhases(verify){
+  PH = verify
+    ? {connect:[0,.05], erase:[.05,.2], program:[.2,.7], verify:[.7,.98], reset:[.98,1]}
+    : {connect:[0,.06], erase:[.06,.25], program:[.25,.96], verify:[.96,.96], reset:[.96,1]};
+}
+function phase(name, frac){ const [a, b] = PH[name]; setBar(a + (b - a) * Math.min(1, Math.max(0, frac))); }
+function setStage(key){ state.stageKey = key; $('stageLabel').textContent = key ? t(key) : ''; }
+
+function renderProbe(){
+  const el = $('probeStatus');
+  if (state.tr){ el.textContent = t('probeConnected', {name: state.probeName}); el.className = 'badge ok'; }
+  else { el.textContent = t('probeNone'); el.className = 'badge'; }
+  const dd = $('devDetected');
+  if (state.tr && state.device){
+    dd.textContent = t('autoDetected', {name: devName(state.device)});
+    dd.classList.remove('hidden');
+  } else dd.classList.add('hidden');
+  $('card2').classList.toggle('disabled', !state.tr);
+  renderSource();
+}
+function fwRangeText(fw){
+  const lines = [];
+  const fBytes = fw.flash.reduce((a, s) => a + s.data.length, 0);
+  if (fw.flash.length){
+    const lo = fw.flash[0].start;
+    const hi = fw.flash[fw.flash.length - 1];
+    lines.push(t('flashInfo', {kb: Math.round(fBytes / 1024), pages: fw.pages.length,
+      range: hex(lo) + '–' + hex(hi.start + hi.data.length)}));
+  }
+  const uWords = fw.uicr.reduce((a, s) => a + s.words.length, 0);
+  if (uWords) lines.push(t('uicrInfo', {words: uWords}));
+  return lines.join('\n');
+}
+function renderSource(){
+  const hasAuto = !!(state.device && state.device.manifest);
+  $('srcChoice').classList.toggle('hidden', !hasAuto);
+  if (hasAuto){
+    const lb = $('srcAutoLabel');
+    if (state.autoStatus === 'loading') lb.textContent = t('autoLoading');
+    else if (state.autoStatus === 'ok') lb.textContent = t('srcAuto', {v: 'v' + state.autoFw.version});
+    else lb.textContent = t('autoFailed');
+    $('srcAutoR').disabled = state.autoStatus !== 'ok';
+    $('srcAutoR').checked = state.source === 'auto';
+    $('srcManualR').checked = state.source === 'manual';
+    const ar = $('autoRanges');
+    if (state.autoStatus === 'ok' && state.source === 'auto'){
+      ar.textContent = fwRangeText(state.autoFw);
+      ar.classList.remove('hidden');
+    } else ar.classList.add('hidden');
+  }
+  $('manualArea').classList.toggle('hidden', hasAuto && state.source === 'auto');
+  renderFile();
+}
+function renderFile(){
+  const fw = state.manualFw;
+  $('fileInfo').classList.toggle('hidden', !fw);
+  $('drop').classList.toggle('hidden', !!fw);
+  if (fw){
+    $('fileName').textContent = t('fileInfo', {name: fw.fileName, kb: fw.kb});
+    $('fileRanges').textContent = fwRangeText(fw);
+  }
+  renderStep3Gate();
+}
+function renderStep3Gate(){
+  $('card3').classList.toggle('disabled', !(state.tr && activeFw()) || state.updating);
+}
+function renderResult(){
+  if (state.resultKind === 'uptodate'){
+    $('okTitle').textContent = t('upToDateTitle');
+    $('okHint').textContent = t('upToDateHint', {v: state.upToDateV});
+  } else {
+    $('okTitle').textContent = t('success');
+    $('okHint').textContent = t('successHint');
+  }
+}
+function showView(v){ // 'pre' | 'progress' | 'ok' | 'bad'
+  $('preUpdate').classList.toggle('hidden', v !== 'pre');
+  $('progressArea').classList.toggle('hidden', v !== 'progress');
+  $('resultOk').classList.toggle('hidden', v !== 'ok');
+  $('resultBad').classList.toggle('hidden', v !== 'bad');
+}
+function refreshDynamic(){
+  renderProbe(); renderResult();
+  if (state.stageKey) $('stageLabel').textContent = t(state.stageKey);
+  if (state.lastErr) $('errDetail').textContent = errText(state.lastErr);
+}
+
+/* -------------------------- language -------------------------------- */
+function applyLang(l){
+  lang = I18N[l] ? l : 'en';
+  document.documentElement.lang = ({zh: 'zh-Hant', en: 'en', ja: 'ja'})[lang];
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.title = t('title') + ' · ' + CONFIG.deviceName;
+  $('langSel').value = lang;
+  try { localStorage.setItem('fw_updater_lang', lang); } catch (e){}
+  refreshDynamic();
+}
+function detectLang(){
+  try {
+    const saved = localStorage.getItem('fw_updater_lang');
+    if (saved && I18N[saved]) return saved;
+  } catch (e){}
+  const nav = (navigator.languages && navigator.languages[0]) || navigator.language || 'en';
+  if (/^zh/i.test(nav)) return 'zh';
+  if (/^ja/i.test(nav)) return 'ja';
+  return 'en';
+}
+
+/* ------------------------- probe connect ----------------------------- */
+async function attachTransport(tr){
+  await tr.open();
+  state.tr = tr;
+  state.dap = new DAP(tr);
+  state.probeName = tr.name;
+  $('probeErr').classList.add('hidden');
+  log('Probe connected: ' + tr.name + ' [' + tr.kind + ']');
+  state.device = matchDevice(tr.name);
+  if (state.device){
+    log('Recognized device: ' + state.device.id);
+    loadManifest(state.device);           // async; updates the UI when done
+  }
+  renderProbe();
+}
+function matchDevice(productName){
+  const p = (productName || '').toLowerCase();
+  for (const d of (state.registry.devices || [])){
+    for (const n of (d.probeNames || [])){
+      if (p.startsWith(n.toLowerCase())) return d;
+    }
+  }
+  return null;
+}
+function buildFw(segs, fileName){
+  const {flash, uicr} = classifySegments(segs);
+  const pages = new Set();
+  for (const s of flash){
+    const first = s.start & ~(CONFIG.pageSize - 1);
+    for (let a = first; a < s.start + s.data.length; a += CONFIG.pageSize) pages.add(a);
+  }
+  const bytes = segs.reduce((a, s) => a + s.data.length, 0);
+  return {flash, uicr, pages: [...pages].sort((a, b) => a - b),
+          fileName, kb: Math.max(1, Math.round(bytes / 1024))};
+}
+async function loadManifest(dev){
+  state.autoStatus = 'loading'; state.autoFw = null; renderSource();
+  try {
+    const mUrl = new URL(dev.manifest, location.href);
+    const mr = await fetch(mUrl, {cache: 'no-store'});
+    if (!mr.ok) throw new Error('manifest HTTP ' + mr.status);
+    const man = await mr.json();
+    const hexUrl = new URL(man.hex, mUrl);
+    const hr = await fetch(hexUrl, {cache: 'no-store'});
+    if (!hr.ok) throw new Error('hex HTTP ' + hr.status);
+    const text = await hr.text();
+    const fw = buildFw(parseIntelHex(text), String(man.hex).split('/').pop());
+    fw.version = man.version || '?';
+    fw.versionCode = (typeof man.versionCode === 'number') ? (man.versionCode >>> 0) : undefined;
+    state.autoFw = fw;
+    state.autoStatus = 'ok';
+    if (!state.manualFw) state.source = 'auto';
+    log('Latest firmware: v' + fw.version + ' (' + fw.fileName + ')' +
+        (fw.versionCode !== undefined ? ', versionCode=' + hex(fw.versionCode) : ''));
+  } catch (e){
+    state.autoStatus = 'fail';
+    if (state.source === 'auto') state.source = 'manual';
+    log('Latest-firmware fetch failed: ' + errText(e), 'warn');
+  }
+  renderSource();
+}
+function probeFail(e){
+  if (e && (e.name === 'NotFoundError' || e.name === 'AbortError')) return; // user cancelled the picker
+  log('Connect failed: ' + errText(e), 'err');
+  const el = $('probeErr');
+  el.textContent = errText(e);
+  el.classList.remove('hidden');
+}
+async function connectUsb(){
+  if (!navigator.usb){ probeFail(mkErr('errNoWebUsb')); return; }
+  try {
+    const dev = await navigator.usb.requestDevice({filters: []});
+    await attachTransport(new WebUSBTransport(dev));
+  } catch (e){ probeFail(e); }
+}
+async function connectHid(){
+  if (!navigator.hid){ probeFail(mkErr('errNoWebHid')); return; }
+  try {
+    const devs = await navigator.hid.requestDevice({filters: []});
+    if (!devs || !devs.length) return;
+    const dev = devs.find(d => (d.collections || []).some(c => c.usagePage >= 0xFF00)) || devs[0];
+    await attachTransport(new WebHIDTransport(dev));
+  } catch (e){ probeFail(e); }
+}
+function dropProbe(){
+  if (state.tr){ state.tr.close(); }
+  state.tr = null; state.dap = null; state.probeName = '';
+  state.device = null;
+  if (state.source === 'auto') state.source = state.manualFw ? 'manual' : 'auto';
+  renderProbe();
+}
+
+/* -------------------------- file loading ----------------------------- */
+async function loadFile(file){
+  $('fileErr').classList.add('hidden');
+  try {
+    const text = await file.text();
+    const fw = buildFw(parseIntelHex(text), file.name);
+    state.manualFw = fw;
+    state.source = 'manual';
+    log('Firmware loaded: ' + file.name + ' — ' +
+        fw.flash.length + ' flash segment(s), ' + fw.pages.length + ' page(s), ' +
+        fw.uicr.length + ' UICR segment(s)');
+    for (const s of fw.flash.concat(fw.uicr)) log('  segment ' + hex(s.start) + ' … ' + hex(s.start + s.data.length) + ' (' + s.data.length + ' B)');
+    renderSource();
+    showView('pre');
+  } catch (e){
+    state.manualFw = null;
+    log('File rejected: ' + errText(e), 'err');
+    const el = $('fileErr');
+    el.textContent = errText(e);
+    el.classList.remove('hidden');
+    renderSource();
+  }
+}
+
+/* -------------------------- update flow ------------------------------ */
+async function runUpdate(){
+  const fwsel = activeFw();
+  const verify = $('optVerify').checked;
+  const eraseMode = $('optErase').value;          // smart | full | none
+  const force = $('optForce').checked;
+  const clockHz = parseInt($('optClock').value, 10) || CONFIG.defaultSwdClockHz;
+  makePhases(verify);
+  const {flash, uicr, pages} = fwsel;
+  const dap = state.dap, tgt = new Target(dap);
+
+  setStage('stageConnect'); phase('connect', 0.1);
+  await dap.init(clockHz);
+  await tgt.dpInit();
+  phase('connect', 0.6);
+
+  // identify chip; a FAULT here usually means APPROTECT is enabled
+  try {
+    await tgt.memInit();
+    await tgt.write32(NRF.DHCSR, 0xA05F0003);            // halt the core
+    const dhcsr = await tgt.read32(NRF.DHCSR);
+    log('Core halted (DHCSR=' + hex(dhcsr) + ')');
+    const part = await tgt.read32(NRF.FICR_PART);
+    const variant = await tgt.read32(NRF.FICR_VARIANT);
+    const id0 = await tgt.read32(NRF.FICR_DEVICEID0);
+    const id1 = await tgt.read32(NRF.FICR_DEVICEID1);
+    log('Chip: PART=' + hex(part) + ' VARIANT=' + hex(variant) +
+        ' DEVICEID=' + hex(id1) + hex(id0).slice(2));
+    if (part !== CONFIG.expectedPart){
+      log(t('warnPartMismatch', {part: hex(part)}), 'warn');
+      if (CONFIG.blockIfPartMismatch) throw mkErr('errPart');
+    }
+  } catch (e){
+    if (e.i18nKey === 'errSwdFail') throw mkErr('errProtected');
+    throw e;
+  }
+  phase('connect', 1);
+
+  // ---- optional current-version check (auto mode only) ----
+  if (state.source === 'auto' && state.device && state.device.versionAddr &&
+      fwsel.versionCode !== undefined){
+    try {
+      const cur = await tgt.read32(state.device.versionAddr >>> 0);
+      log(t('curVersion', {v: verStr(cur) + ' (' + hex(cur) + ')'}));
+      if (cur === fwsel.versionCode && !force){
+        state.upToDateV = verStr(cur);
+        try { await tgt.write32(NRF.DHCSR, 0xA05F0000); } catch (e){}   // resume core
+        await dap.disconnect();
+        return 'uptodate';
+      }
+    } catch (e){ log('Version read failed (continuing with update): ' + errText(e), 'warn'); }
+  }
+
+  // ---- erase ----
+  setStage('stageErase');
+  if (eraseMode === 'none'){
+    log('Erase skipped (advanced option)', 'warn');
+    phase('erase', 1);
+  } else if (eraseMode === 'full'){
+    log('ERASEALL (full chip erase incl. UICR)');
+    await tgt.write32(NRF.NVMC_CONFIG, 2);
+    await tgt.write32(NRF.NVMC_ERASEALL, 1);
+    await pollNvmcReady(tgt, 15000);
+    await tgt.write32(NRF.NVMC_CONFIG, 0);
+    phase('erase', 1);
+  } else {
+    log('Erasing ' + pages.length + ' page(s)');
+    await tgt.write32(NRF.NVMC_CONFIG, 2);
+    for (let i = 0; i < pages.length; i++){
+      await tgt.write32(NRF.NVMC_ERASEPAGE, pages[i]);
+      await pollNvmcReady(tgt, 3000);
+      phase('erase', (i + 1) / pages.length);
+    }
+    await tgt.write32(NRF.NVMC_CONFIG, 0);
+    if (uicr.length){
+      // erase UICR only if the new words cannot be written over the current ones
+      let needErase = false;
+      for (const s of uicr){
+        const cur = await tgt.readBlock(s.start, s.words.length);
+        for (let i = 0; i < s.words.length; i++){
+          if (((cur[i] & s.words[i]) >>> 0) !== s.words[i]){ needErase = true; break; }
+        }
+        if (needErase) break;
+      }
+      if (needErase){
+        log('Erasing UICR');
+        await tgt.write32(NRF.NVMC_CONFIG, 2);
+        await tgt.write32(NRF.NVMC_ERASEUICR, 1);
+        await pollNvmcReady(tgt, 3000);
+        await tgt.write32(NRF.NVMC_CONFIG, 0);
+      } else log('UICR erase not needed');
+    }
+  }
+
+  // ---- program ----
+  setStage('stageProgram');
+  const all = flash.concat(uicr);
+  const totalWords = all.reduce((a, s) => a + s.words.length, 0);
+  let done = 0;
+  log('Programming ' + totalWords * 4 + ' bytes');
+  await tgt.write32(NRF.NVMC_CONFIG, 1);                 // write enable
+  for (const s of all){
+    await tgt.writeBlock(s.start, s.words, i => phase('program', (done + i) / totalWords));
+    done += s.words.length;
+    await pollNvmcReady(tgt, 3000);
+  }
+  await tgt.write32(NRF.NVMC_CONFIG, 0);
+
+  // ---- verify ----
+  if (verify){
+    setStage('stageVerify');
+    let vdone = 0;
+    for (const s of all){
+      const rb = await tgt.readBlock(s.start, s.words.length,
+        i => phase('verify', (vdone + i) / totalWords));
+      for (let i = 0; i < s.words.length; i++){
+        if (rb[i] !== s.words[i]){
+          throw mkErr('errVerify', {addr: hex(s.start + i * 4), exp: hex(s.words[i]), got: hex(rb[i])});
+        }
+      }
+      vdone += s.words.length;
+    }
+    log('Verify OK');
+  }
+
+  // ---- reset & run ----
+  setStage('stageReset'); phase('reset', 0.3);
+  try { await tgt.write32(NRF.DHCSR, 0xA05F0000); } catch (e){}     // release core
+  try { await tgt.write32(NRF.AIRCR, 0x05FA0004); } catch (e){}     // SYSRESETREQ
+  await dap.disconnect();
+  log('Device reset — update finished');
+  phase('reset', 1);
+  return 'ok';
+}
+
+async function startUpdate(){
+  if (!state.dap){ probeFail(mkErr('errNoProbe')); return; }
+  if (!activeFw()) return;
+  state.updating = true; state.lastErr = null; state.resultKind = null;
+  renderStep3Gate();
+  $('card3').classList.remove('disabled');
+  showView('progress');
+  setBar(0);
+  const t0 = Date.now();
+  try {
+    const outcome = await runUpdate();
+    log('Total time: ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+    state.resultKind = (outcome === 'uptodate') ? 'uptodate' : 'ok';
+    renderResult();
+    showView('ok');
+  } catch (e){
+    state.lastErr = e;
+    log('UPDATE FAILED: ' + errText(e), 'err');
+    $('errDetail').textContent = errText(e);
+    showView('bad');
+    // best-effort cleanup so the next attempt starts clean
+    try { if (state.dap) await state.dap.disconnect(); } catch (e2){}
+  } finally {
+    state.updating = false;
+    renderStep3Gate();
+  }
+}
+
+/* --------------------------- recover --------------------------------- */
+async function runRecover(){
+  const msg = $('recoverMsg');
+  if (!state.dap){ probeFail(mkErr('errNoProbe')); return; }
+  if (!state.recoverArmed){
+    state.recoverArmed = true;
+    msg.textContent = t('recoverConfirm');
+    setTimeout(() => { state.recoverArmed = false; if (msg.textContent === t('recoverConfirm')) msg.textContent = ''; }, 6000);
+    return;
+  }
+  state.recoverArmed = false;
+  msg.textContent = '…';
+  try {
+    const dap = state.dap, tgt = new Target(dap);
+    await dap.init(parseInt($('optClock').value, 10) || CONFIG.defaultSwdClockHz);
+    await tgt.dpInit();
+    // nRF52840 CTRL-AP is AP #1: ERASEALL @0x04, ERASEALLSTATUS @0x08
+    log('CTRL-AP ERASEALL…');
+    await tgt.apWrite(1, 0x04, 1);
+    const dl = Date.now() + 20000;
+    for (;;){
+      const s = await tgt.apRead(1, 0x08);
+      if (s === 0) break;
+      if (Date.now() > dl) throw mkErr('errNvmcTimeout');
+    }
+    await tgt.apWrite(1, 0x00, 1);   // CTRL-AP RESET
+    await tgt.apWrite(1, 0x00, 0);
+    await dap.disconnect();
+    log('Recover done');
+    msg.textContent = t('recoverDone');
+  } catch (e){
+    log('Recover failed: ' + errText(e), 'err');
+    msg.textContent = t('recoverFailed', {msg: errText(e)});
+  }
+}
+
+/* --------------------------- wiring ---------------------------------- */
+function init(){
+  applyLang(detectLang());
+  $('langSel').addEventListener('change', e => applyLang(e.target.value));
+
+  const usbOk = !!navigator.usb, hidOk = !!navigator.hid;
+  if (!usbOk && !hidOk){
+    const b = $('unsupported');
+    b.textContent = t('unsupported');
+    b.classList.remove('hidden');
+    $('btnConnect').disabled = true;
+    $('btnConnectHid').disabled = true;
+  }
+
+  $('btnConnect').addEventListener('click', () => usbOk ? connectUsb() : connectHid());
+  $('btnConnectHid').addEventListener('click', connectHid);
+
+  const drop = $('drop'), fi = $('fileInput');
+  drop.addEventListener('click', () => fi.click());
+  fi.addEventListener('change', () => { if (fi.files[0]) loadFile(fi.files[0]); fi.value = ''; });
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+  $('btnReselect').addEventListener('click', () => { state.manualFw = null; renderSource(); fi.click(); });
+
+  $('srcAutoR').addEventListener('change', () => { if ($('srcAutoR').checked){ state.source = 'auto'; renderSource(); } });
+  $('srcManualR').addEventListener('change', () => { if ($('srcManualR').checked){ state.source = 'manual'; renderSource(); } });
+
+  // load the device registry (same-origin devices.json); fall back to the embedded default
+  fetch(CONFIG.devicesUrl, {cache: 'no-store'})
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      if (j && Array.isArray(j.devices)){
+        state.registry = j;
+        log('Device registry loaded: ' + j.devices.length + ' device(s)');
+        if (state.tr && !state.device){
+          state.device = matchDevice(state.probeName);
+          if (state.device) loadManifest(state.device);
+          renderProbe();
+        }
+      }
+    })
+    .catch(() => {});
+
+  $('btnStart').addEventListener('click', startUpdate);
+  $('btnRetry').addEventListener('click', () => showView('pre'));
+  $('btnAgain').addEventListener('click', () => showView('pre'));
+  $('btnRecover').addEventListener('click', runRecover);
+
+  $('btnLogDl').addEventListener('click', () => {
+    const blob = new Blob([logLines.join('\n')], {type: 'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fw-update-log.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  $('btnLogClear').addEventListener('click', () => { logLines.length = 0; logEl.textContent = ''; });
+
+  if (navigator.usb) navigator.usb.addEventListener('disconnect', e => {
+    if (state.tr && state.tr.kind === 'usb' && e.device === state.tr.device){
+      log(t('errDisconnected'), 'warn'); dropProbe();
+    }
+  });
+  if (navigator.hid) navigator.hid.addEventListener('disconnect', e => {
+    if (state.tr && state.tr.kind === 'hid' && e.device === state.tr.device){
+      log(t('errDisconnected'), 'warn'); dropProbe();
+    }
+  });
+
+  renderProbe(); renderResult(); showView('pre');
+  log('Ready. ' + (usbOk ? 'WebUSB ✓ ' : 'WebUSB ✗ ') + (hidOk ? 'WebHID ✓' : 'WebHID ✗'));
+}
+init();
+</script>
+</body>
+</html>

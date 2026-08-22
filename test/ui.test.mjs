@@ -112,5 +112,13 @@ $('langSel').dispatchEvent(new window.Event('change'));
 await new Promise(r => setTimeout(r, 120));
 check('Japanese tabs read correctly', /ワイヤレス/.test(txt('methods')), txt('methods').slice(0, 40));
 
+// --- "device detected" must mean a device actually identified itself --------
+// It used to be printed by the manifest prefetch on page load, so it appeared
+// with nothing plugged in and stayed there for the whole session.
+const detectedVisible = () => !$('devDetected').classList.contains('hidden');
+check('no "detected" banner before connecting', !detectedVisible(),
+      'text was: ' + txt('devDetected'));
+check('manifest still prefetched anyway', txt('fwStatus') === '1.4.2', txt('fwStatus'));
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

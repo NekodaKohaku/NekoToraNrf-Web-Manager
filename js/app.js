@@ -309,16 +309,25 @@ async function dropConnections(){
   if (state.smp){ await state.smp.close().catch(() => {}); state.smp = null; }
   if (state.tr){ try { await state.tr.close(); } catch (_) {} state.tr = null; state.dap = null; }
   state.trackers.clear(); state.selected.clear(); state.inRecovery = false;
+  /* Whatever identified itself is gone, so the banner saying so has to go too. */
+  $('devDetected').classList.add('hidden');
+  $('connErr').classList.add('hidden');
 }
 
 /* ========================== manifest loading ========================= */
 
-async function loadManifestFor(dev){
+/* `detected` means a real device told us what it is - a probe or dongle whose
+ * USB product name matched the registry. It is not the same as knowing which
+ * manifest to fetch: with one product registered we can fetch that up front so
+ * step 3 is answered before anything is plugged in. Announcing "device
+ * detected" for that case claims something that has not happened, and the
+ * banner then sits there whether or not anything is connected. */
+async function loadManifestFor(dev, { detected = false } = {}){
   state.device = dev;
   $('fwErr').classList.add('hidden');
+  $('devDetected').classList.toggle('hidden', !(dev && detected));
   if (!dev){ state.manifest = null; renderFirmware(); return; }
-  $('devDetected').textContent = t('autoDetected', { name: reg.devName(dev) });
-  $('devDetected').classList.remove('hidden');
+  if (detected) $('devDetected').textContent = t('autoDetected', { name: reg.devName(dev) });
   try {
     state.manifest = await reg.loadManifest(dev);
     log(`manifest: ${state.manifest.version} (code ${state.manifest.versionCode})`);
@@ -366,7 +375,7 @@ async function attachProbe(tr){
   state.probeName = tr.name;
   log('probe: ' + tr.name + ' (' + tr.kind + ')');
   const dev = reg.matchProbe(tr.name);
-  if (dev) await loadManifestFor(dev);
+  if (dev) await loadManifestFor(dev, { detected: true });
   refresh();
 }
 
@@ -413,7 +422,7 @@ async function connectDongle(){
     state.dongle = d;
     state.ota = new OtaClient(d);
     log('dongle: ' + d.name);
-    await loadManifestFor(match);
+    await loadManifestFor(match, { detected: true });
     refresh();
     await scanTrackers();
   } catch (e){ connFail(e); }
@@ -471,6 +480,8 @@ async function connectSerial(){
     state.port = port;
     state.smp = smp;
     log('serial port opened at ' + smp.baudRate);
+    /* A serial port says nothing about what is on the other end, so this
+     * only picks a manifest - it is not a detection. */
     if (!state.device) await loadManifestFor(reg.devices()[0] || null);
     /* It may already be sitting in recovery from a previous attempt. */
     state.inRecovery = await isInRecovery(smp);
@@ -717,6 +728,7 @@ async function init(){
       if (state.dongle && state.dongle.device === e.device){
         state.dongle = null; state.ota = null;
         state.trackers.clear(); state.selected.clear();
+        $('devDetected').classList.add('hidden');
         log('dongle disconnected', 'warn');
         refresh();
       }

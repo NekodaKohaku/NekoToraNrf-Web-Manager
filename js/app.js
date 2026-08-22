@@ -18,7 +18,7 @@ import { parseUpdateBin, looksLikeUpdateBin } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
 import { Dongle, OtaClient } from './ota.js';
-import { SmpPort, enterRecovery, isInRecovery, uploadImage, linkTest } from './smp.js';
+import { SmpPort, enterRecovery, uploadImage, linkTest } from './smp.js';
 import * as reg from './registry.js';
 
 const $ = id => document.getElementById(id);
@@ -170,9 +170,9 @@ function renderConnect(){
     $('btnRescan').classList.toggle('hidden', !state.dongle);
     $('otaPick').classList.toggle('hidden', !state.dongle || !state.trackers.size);
   } else {
-    st.textContent = state.smp ? t('dfuPortOk') : t('dfuPortNone');
-    if (state.smp) st.classList.add('ok');
-    $('dfuModeBox').classList.toggle('hidden', !state.smp);
+    st.textContent = state.port ? t('dfuPortOk') : t('dfuPortNone');
+    if (state.port) st.classList.add('ok');
+    $('dfuModeBox').classList.toggle('hidden', !state.port);
     const ms = $('dfuModeStatus');
     ms.textContent = state.inRecovery ? t('dfuModeIn') : t('dfuModeUnknown');
     ms.classList.toggle('ok', state.inRecovery);
@@ -305,7 +305,7 @@ function renderFirmware(){
 function connected(){
   return state.method === 'swd' ? !!state.tr
        : state.method === 'ota' ? !!state.dongle
-       : !!state.smp;
+       : !!state.port;
 }
 function readyToStart(){
   if (!connected()) return false;
@@ -367,6 +367,7 @@ async function selectMethod(id){
 async function dropConnections(){
   if (state.dongle){ await state.dongle.close().catch(() => {}); state.dongle = null; state.ota = null; }
   if (state.smp){ await state.smp.close().catch(() => {}); state.smp = null; }
+  state.port = null;
   if (state.tr){ try { await state.tr.close(); } catch (_) {} state.tr = null; state.dap = null; }
   state.trackers.clear(); state.selected.clear(); state.inRecovery = false;
   /* Whatever identified itself is gone, so the banner saying so has to go too. */
@@ -553,86 +554,54 @@ const DFU_BAUDS = [1000000, 921600, 460800, 230400, 115200];
 
 async function connectSerial(){
   if (!navigator.serial) return connFail(mkErr('errNoWebSerial'));
-  let port;
-  try { port = await navigator.serial.requestPort(); }
-  catch (e){ return isCancel(e) ? undefined : connFail(e); }
-
-  const choice = $('dfuBaud').value;
-  const list = choice === 'auto' ? DFU_BAUDS : [parseInt(choice, 10)];
-  state.busy = true; gate();
-
   try {
-    let opened = null;
-    for (const baud of list){
-      const smp = new SmpPort(port, { baudRate: baud });
-      try { await smp.open(); }
-      catch (e){ log(`serial: cannot open at ${baud} (${errText(e)})`, 'warn'); continue; }
-
-      if (list.length === 1){ opened = smp; break; }   // trust an explicit choice
-
-      $('connStatus').textContent = t('dfuProbing', { baud });
-      /* Only a device already sitting in recovery answers an echo, so a silent
-       * probe is not proof of the wrong rate - it just means we cannot tell
-       * yet. Keep the last one open and let "enter update mode" settle it. */
-      if (await isInRecovery(smp)){ opened = smp; log(`serial: recovery answered at ${baud}`); break; }
-      await smp.close();
-      opened = null;
-    }
-
-    if (!opened){
-      /* Nothing answered. Fall back to the rate this firmware ships with so
-       * the flow still works for a tracker that has not been put into
-       * recovery yet. */
-      const baud = choice === 'auto' ? 115200 : parseInt(choice, 10);
-      opened = new SmpPort(port, { baudRate: baud });
-      await opened.open();
-      log(`serial: no reply while probing, staying at ${baud}`, 'warn');
-    }
-
+    const port = await navigator.serial.requestPort();
     state.port = port;
-    state.smp = opened;
-    log('serial port opened at ' + opened.baudRate);
-    /* A serial port says nothing about what is on the other end, so this
-     * only picks a manifest - it is not a detection. */
+    state.smp = null;
+    state.inRecovery = false;
+    /* No baud probing here. Nothing can be learned yet: a tracker running its
+     * normal firmware does not speak SMP, so silence at every rate would prove
+     * nothing. The rate is settled by "enter update mode", which can send the
+     * dfu command and watch for recovery across the reboot. */
+    log('serial port selected');
     if (!state.device) await loadManifestFor(reg.devices()[0] || null);
-    state.inRecovery = await isInRecovery(opened);
-  } catch (e){
-    if (!isCancel(e)) connFail(e);
-  } finally {
-    state.busy = false;
     refresh();
-  }
+  } catch (e){ if (!isCancel(e)) connFail(e); }
 }
 
 async function doEnterRecovery(){
-  if (!state.smp) return connFail(mkErr('errDfuNoPort'));
+  if (!state.port) return connFail(mkErr('errDfuNoPort'));
   state.busy = true; gate();
   $('btnEnterDfu').disabled = true;
   try {
-    const ok = await enterRecovery(state.smp, { timeoutMs: 30000 });
-    state.inRecovery = ok;
-    if (!ok){ connFail(mkErr('errDfuNoResponse')); return; }
+    if (state.smp){ try { await state.smp.close(); } catch (_) {} state.smp = null; }
+
+    const choice = $('dfuBaud').value;
+    const bauds = choice === 'auto' ? DFU_BAUDS : [parseInt(choice, 10)];
+    const got = await enterRecovery(state.port, bauds, {
+      onProbe: baud => { $('connStatus').textContent = t('dfuProbing', { baud }); },
+    });
+
+    if (!got){ state.inRecovery = false; connFail(mkErr('errDfuNoResponse')); return; }
+    state.smp = got.smp;
+    state.inRecovery = true;
     $('connErr').classList.add('hidden');
 
-    /* Now that something is answering, measure the link before trusting it
-     * with a minute-long upload. A baud rate that is too fast for the wiring
-     * or the USB-serial adapter does not fail cleanly - it corrupts occasional
-     * bytes - so the test sends real volume and counts what survives. */
+    /* Measure the link before trusting it with a minute-long upload. A rate
+     * too fast for the wiring does not fail cleanly - it corrupts occasional
+     * bytes - so the test sends volume and counts what survives. */
     const r = await linkTest(state.smp);
     log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok at ${r.payload} B, ` +
         `${r.crcErrors} CRC errors`, r.clean ? undefined : 'warn');
 
     $('dfuLink').classList.remove('hidden');
     if (r.unusable){
-      /* Nothing echoed at any size. Recovery answered a moment ago, so this is
-       * a real link fault rather than a bootloader quirk. */
       $('dfuLink').textContent = t('dfuLinkDead', { baud: r.baudRate });
       $('dfuLink').style.color = 'var(--err)';
     } else if (r.clean){
       $('dfuLink').textContent = t('dfuLinkOk', { baud: r.baudRate, n: r.rounds });
       $('dfuLink').style.color = 'var(--ok)';
     } else {
-      /* Only suggest slowing down when there is somewhere slower to go. */
       const slower = DFU_BAUDS.filter(b => b < r.baudRate);
       $('dfuLink').textContent = slower.length
         ? t('dfuLinkBad', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds, next: slower[0] })
@@ -915,7 +884,7 @@ async function init(){
   }
   if (navigator.serial){
     navigator.serial.addEventListener('disconnect', () => {
-      if (state.smp){ state.smp = null; state.inRecovery = false; log('serial disconnected', 'warn'); refresh(); }
+      if (state.smp || state.port){ state.smp = null; state.port = null; state.inRecovery = false; log('serial disconnected', 'warn'); refresh(); }
     });
   }
 

@@ -281,29 +281,90 @@ export class SmpPort {
 
 /* ===================== high-level DFU ================================ */
 
-/* Get the tracker into serial recovery.
+/* Get the tracker into serial recovery, finding the right baud rate on the way.
  *
- * "dfu" typed at the running application asks it to reboot into recovery, but
- * that only works if the application is alive and listening. The other two
- * routes - four quick button presses, or a tap on RESET - are driven by the
- * user, so rather than choosing one this just keeps probing for 30 seconds and
- * takes whichever arrives first. MCUboot now holds in recovery indefinitely
- * once it gets there (the watchdog feed and CPU-idle override in the firmware
- * build), so there is no window to miss on the far side.
+ * Two things make this more than "send dfu and wait":
+ *
+ * The rate is not knowable up front. It is fixed in the firmware, MCUboot
+ * cannot update itself, and units flashed before the rate changed keep the old
+ * one forever - so a fleet is mixed and asking the customer is not a fair
+ * question.
+ *
+ * And the probe has to span a reboot. `dfu` is a command of the running
+ * *application*, while the reply afterwards comes from *MCUboot recovery*.
+ * Probing for an SMP echo before sending anything therefore finds nothing: a
+ * healthy running tracker does not speak SMP at all. Silence proves nothing
+ * about the rate, so each candidate has to be given the whole cycle - open,
+ * send dfu, wait for recovery - before being ruled out.
+ *
+ * Returns { smp, baudRate } on success, or null. The caller owns the port; any
+ * SmpPort opened here and not returned is closed again.
  */
-export async function enterRecovery(smp, { timeoutMs = 30000, onProbe = null } = {}){
-  try { await smp.writeRaw(new TextEncoder().encode('dfu\n')); } catch (_) {}
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end){
-    try { if (await smp.echo(300)) return true; } catch (_) {}
-    if (onProbe) onProbe(Math.max(0, end - Date.now()));
-    await sleep(60);
+export async function enterRecovery(port, bauds, { perBaudMs = 6000, onProbe = null } = {}){
+  /* Open at one rate, do something, close. Web Serial cannot change the rate
+   * of an open port, so every rate change is a full close/reopen cycle. */
+  const at = async (baudRate, fn) => {
+    let smp = null;
+    try { smp = new SmpPort(port, { baudRate }); await smp.open(); }
+    catch (e){
+      log(`serial: cannot open at ${baudRate} (${e && e.message})`, 'warn');
+      if (smp){ try { await smp.close(); } catch (_) {} }
+      return null;
+    }
+    if (onProbe) onProbe(baudRate);
+    let keep = false;
+    try { keep = await fn(smp); } catch (_) { keep = false; }
+    if (keep) return smp;
+    try { await smp.close(); } catch (_) {}
+    return null;
+  };
+
+  /* Phase 1 - is it already there? A tracker left in recovery from a previous
+   * attempt is the common case when something went wrong, and it needs no
+   * reboot, so this is worth one cheap sweep before anything is sent. */
+  for (const baudRate of bauds){
+    const smp = await at(baudRate, s => isInRecovery(s));
+    if (smp){ log(`serial: recovery already active at ${baudRate}`); return { smp, baudRate }; }
   }
-  return false;
+
+  /* Phase 2 - ask the application to reboot into recovery.
+   *
+   * Only one of these rates is the application console; at the others `dfu` is
+   * noise the console will not recognise, which is harmless. We do not know
+   * which one worked, and we cannot tell from here, because the reply comes
+   * from a different program at a possibly different rate. */
+  for (const baudRate of bauds){
+    await at(baudRate, async s => {
+      try { await s.writeRaw(new TextEncoder().encode('dfu\n')); } catch (_) {}
+      await sleep(150);
+      return false;
+    });
+  }
+
+  /* Phase 3 - find recovery again, at any rate.
+   *
+   * This sweep is the whole reason the function is shaped this way. The `dfu`
+   * command goes to the application, whose console rate is set by the app
+   * build, while the answer comes from MCUboot, whose rate is set by the
+   * bootloader build. Those two are supposed to match, but a tracker flashed
+   * before the rate changed - or one whose bootloader was never re-flashed,
+   * which DFU cannot do - has an application on one rate and a bootloader on
+   * another. Waiting for a reply on the rate we sent `dfu` on would then time
+   * out on a device that is sitting in recovery, perfectly reachable, one rate
+   * away. So after sending, we stop assuming and just look everywhere. */
+  const deadline = Date.now() + perBaudMs;
+  while (Date.now() < deadline){
+    for (const baudRate of bauds){
+      const smp = await at(baudRate, s => isInRecovery(s, 400));
+      if (smp){ log(`serial: entered recovery at ${baudRate}`); return { smp, baudRate }; }
+    }
+    await sleep(120);
+  }
+  return null;
 }
 
-export async function isInRecovery(smp){
-  try { return !!(await smp.echo(800)); } catch (_) { return false; }
+export async function isInRecovery(smp, timeoutMs = 800){
+  try { return !!(await smp.echo(timeoutMs)); } catch (_) { return false; }
 }
 
 /* Upload an MCUboot update image and reboot into it.

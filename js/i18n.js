@@ -158,7 +158,7 @@ zh: {
   dfuOkHint:'追蹤器將自動重新啟動,可以拔除接線了。',
   errNoWebSerial:'此瀏覽器不支援 Web Serial,請改用電腦版 Chrome 或 Edge。',
   errDfuNoPort:'請先連接序列埠',
-  errDfuNoResponse:'追蹤器沒有進入更新模式。請改用手動方式(連按按鈕 4 下或按 RESET)。',
+  errDfuNoResponse:'追蹤器沒有進入更新模式。請改用手動方式進入 DFU 模式。',
   errDfuUpload:'寫入失敗({err})。',
 },
 en: {
@@ -308,7 +308,7 @@ en: {
   dfuOkHint:'The tracker will restart itself; you can unplug the adapter.',
   errNoWebSerial:'This browser does not support Web Serial. Please use desktop Chrome or Edge.',
   errDfuNoPort:'Connect the serial port first',
-  errDfuNoResponse:'The tracker did not enter update mode. Try the manual route (four button presses, or RESET).',
+  errDfuNoResponse:'The tracker did not enter update mode. Put it into DFU mode manually and try again.',
   errDfuUpload:'Write failed ({err}).',
 },
 ja: {
@@ -458,7 +458,7 @@ ja: {
   dfuOkHint:'トラッカーは自動的に再起動します。配線を外して構いません。',
   errNoWebSerial:'このブラウザは Web Serial に対応していません。デスクトップ版の Chrome または Edge をご利用ください。',
   errDfuNoPort:'先にシリアルポートを接続してください',
-  errDfuNoResponse:'トラッカーが更新モードに入りませんでした。手動の方法(ボタン4回、または RESET)をお試しください。',
+  errDfuNoResponse:'トラッカーが更新モードに入りませんでした。手動で DFU モードにしてからお試しください。',
   errDfuUpload:'書き込みに失敗しました({err})。',
 },
 

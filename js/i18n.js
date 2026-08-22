@@ -84,9 +84,9 @@ zh: {
   mOtaName:'無線更新', mOtaTag:'推薦',
   mOtaDesc:'透過 NekoTora Dongle 無線更新,不必拆機或接線,可一次更新多台追蹤器。',
   mDfuName:'有線更新',
-  mDfuDesc:'用 USB 轉序列埠(UART)更新。無線更新失敗、或追蹤器連不上 Dongle 時使用。',
+  mDfuDesc:'透過 USB 序列埠更新。無線更新失敗、或追蹤器連不上 Dongle 時使用。',
   mSwdName:'SWD 燒錄', mSwdTag:'進階',
-  mSwdDesc:'用燒錄器直接寫入整顆 Flash。這是唯一能救回開不了機的追蹤器的方式。',
+  mSwdDesc:'直接寫入整顆 Flash。這是唯一能救回開不了機的追蹤器的方式。',
   change:'更換',
   methodLabel:'更新方式:',
   /* ---- 韌體(自動) ---- */
@@ -140,7 +140,7 @@ zh: {
   errOtaSize:'韌體太大,追蹤器的更新區放不下。',
   /* ---- 有線 DFU ---- */
   dfuStepConnect:'連接序列埠',
-  dfuConnectDesc:'把 USB-TTL 轉接板接到追蹤器(TX→RX、RX→TX、GND 共地),插上電腦後點下面的按鈕。',
+  dfuConnectDesc:'將追蹤器接上電腦 USB,點下面的按鈕,在跳出的視窗中選擇追蹤器的序列埠。',
   dfuConnect:'連接序列埠',
   dfuBaudAuto:'自動偵測速度',
   dfuLinkOk:'連線正常 — {baud} baud,{n} 次測試全部通過。',
@@ -234,9 +234,9 @@ en: {
   mOtaName:'Wireless', mOtaTag:'Recommended',
   mOtaDesc:'Update over the air through the NekoTora Dongle. No cables, no disassembly, and several trackers at once.',
   mDfuName:'Wired',
-  mDfuDesc:'Update over USB-to-serial (UART). Use this if the wireless update fails or the tracker cannot reach the Dongle.',
+  mDfuDesc:'Update over the USB serial port. Use this if the wireless update fails or the tracker cannot reach the Dongle.',
   mSwdName:'SWD', mSwdTag:'Advanced',
-  mSwdDesc:'Write the whole flash directly with a programmer. The only method that can revive a tracker that will not boot.',
+  mSwdDesc:'Write the whole flash directly. The only method that can revive a tracker that will not boot.',
   change:'Change',
   methodLabel:'Method:',
   /* ---- firmware (automatic) ---- */
@@ -290,7 +290,7 @@ en: {
   errOtaSize:'Firmware is too large for the tracker’s update area.',
   /* ---- wired DFU ---- */
   dfuStepConnect:'Connect the serial port',
-  dfuConnectDesc:'Wire the USB-TTL adapter to the tracker (TX→RX, RX→TX, common GND), plug it in, then click below.',
+  dfuConnectDesc:'Connect the tracker to this computer over USB, click below, and pick its serial port in the popup.',
   dfuConnect:'Connect serial port',
   dfuBaudAuto:'Detect speed',
   dfuLinkOk:'Link is clean — {baud} baud, {n}/{n} probes passed.',
@@ -384,9 +384,9 @@ ja: {
   mOtaName:'ワイヤレス更新', mOtaTag:'推奨',
   mOtaDesc:'NekoTora Dongle 経由で無線更新します。分解も配線も不要で、複数台をまとめて更新できます。',
   mDfuName:'有線更新',
-  mDfuDesc:'USB-シリアル変換(UART)で更新します。ワイヤレス更新が失敗する場合や、Dongle に届かない場合に使います。',
+  mDfuDesc:'USB シリアルポート経由で更新します。ワイヤレス更新が失敗する場合や、Dongle に届かない場合に使います。',
   mSwdName:'SWD 書き込み', mSwdTag:'上級者向け',
-  mSwdDesc:'書き込み器で Flash 全体を直接書き込みます。起動しなくなったトラッカーを復旧できる唯一の方法です。',
+  mSwdDesc:'Flash 全体を直接書き込みます。起動しなくなったトラッカーを復旧できる唯一の方法です。',
   change:'変更',
   methodLabel:'更新方法:',
   /* ---- ファームウェア(自動) ---- */
@@ -440,7 +440,7 @@ ja: {
   errOtaSize:'ファームウェアが大きすぎて、トラッカーの更新領域に入りません。',
   /* ---- 有線 DFU ---- */
   dfuStepConnect:'シリアルポートを接続',
-  dfuConnectDesc:'USB-TTL 変換基板をトラッカーに接続し(TX→RX、RX→TX、GND 共通)、PC に挿してから下のボタンを押してください。',
+  dfuConnectDesc:'トラッカーを PC に USB 接続し、下のボタンを押してポップアップからシリアルポートを選んでください。',
   dfuConnect:'シリアルポートを接続',
   dfuBaudAuto:'速度を自動検出',
   dfuLinkOk:'リンク良好 — {baud} baud、{n} 回すべて成功。',

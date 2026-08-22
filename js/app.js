@@ -591,8 +591,9 @@ async function doEnterRecovery(){
      * too fast for the wiring does not fail cleanly - it corrupts occasional
      * bytes - so the test sends volume and counts what survives. */
     const r = await linkTest(state.smp);
-    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok at ${r.payload} B, ` +
-        `${r.crcErrors} CRC errors`, r.clean ? undefined : 'warn');
+    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok via ` +
+        `${r.echo ? r.payload + ' B echo' : 'image-list (bootloader has no echo)'}, ` +
+        `${r.crcErrors} CRC errors, ${r.badLines} bad lines`, r.clean ? undefined : 'warn');
 
     $('dfuLink').classList.remove('hidden');
     if (r.unusable){

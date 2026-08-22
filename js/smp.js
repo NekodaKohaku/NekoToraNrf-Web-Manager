@@ -20,9 +20,9 @@ import { mkErr, log, sleep } from './util.js';
 
 /* SMP groups/ids used here. Group 0 is OS management (echo, reset), group 1 is
  * image management (upload). */
-const OP_WRITE = 2;
+const OP_READ = 0, OP_WRITE = 2;
 const GRP_OS = 0, GRP_IMAGE = 1;
-const ID_ECHO = 0, ID_RESET = 5, ID_UPLOAD = 1;
+const ID_ECHO = 0, ID_RESET = 5, ID_UPLOAD = 1, ID_STATE = 0;
 
 export function crc16(data) {
   let crc = 0;
@@ -454,62 +454,85 @@ export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onPr
 
 /* Probe link quality before committing to a long upload.
  *
- * This tests reachability and integrity, not throughput. The distinction
- * matters because the obvious design - echo a chunk-sized payload and see if
- * it comes back - does not work here: MCUboot's serial recovery is a cut-down
- * SMP implementation whose echo response buffer is far smaller than the 1024
- * byte receive buffer used for image upload. A 256 byte echo is dropped by a
- * perfectly healthy link, and reporting that as a fault sends the customer off
- * to fix wiring that was never broken. It did exactly that at 115200, the one
- * rate known to work.
+ * This tests reachability and integrity, not throughput.
  *
- * So the size is discovered rather than assumed: try progressively smaller
- * payloads until one round-trips, then run the real test at that size. A link
- * that cannot echo even a few bytes is genuinely broken; one that echoes small
- * but not large has a bootloader buffer limit, which says nothing about the
- * baud rate.
+ * The obvious design - echo a payload and check it comes back - is wrong here,
+ * twice over. First, MCUboot's serial recovery is a cut-down SMP stack, and
+ * `CONFIG_BOOT_MGMT_ECHO` is off by default, so it has no echo command at all.
+ * It still *answers*: unknown commands come back as a well-formed SMP response
+ * carrying rc = ENOTSUP. So the link is provably alive and the transport is
+ * provably intact, while the returned payload has no `d` field. Reading that as
+ * "nothing came back" is how a working 1 Mbaud link got reported as completely
+ * dead wiring. Second, even where echo exists, its response buffer is far
+ * smaller than the 1024-byte receive buffer used for uploads, so a large echo
+ * is dropped by a healthy link.
+ *
+ * So: prefer echo when the bootloader has it, at a discovered size, because it
+ * exercises both directions. Otherwise fall back to the image-list command,
+ * which every MCUboot serial recovery implements and which returns a real
+ * payload including a 32-byte hash - enough to prove the receive path carries
+ * volume intact at this rate. Only true silence counts as a dead link.
  *
  * The authoritative throughput and error figures come from uploadImage's own
  * counters afterwards, because only the real transfer exercises the real path.
  */
+
+/* Did this response actually carry the echoed text back? */
+function echoed(r, probe){ return !!(r && r.payload && r.payload.d === probe); }
+
+/* An SMP response at all - including an error response. Anything well-formed
+ * enough to decode and match our sequence number proves the link. */
+function answered(r){ return !!(r && typeof r.op === 'number'); }
+
 export async function linkTest(smp, { rounds = 20, sizes = [128, 64, 32, 8] } = {}){
   const crc0 = smp.crcErrors, bad0 = smp.badLines;
+  const base = { crcErrors: 0, badLines: 0, baudRate: smp.baudRate };
+  const tally = () => ({ crcErrors: smp.crcErrors - crc0, badLines: smp.badLines - bad0 });
 
-  /* Largest payload this bootloader will echo. */
-  let payload = 0;
+  /* Largest payload this bootloader will echo, if it echoes at all. */
+  let payload = 0, sawAnswer = false;
   for (const n of sizes){
     const probe = 'A'.repeat(n);
-    try {
-      const r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: probe }, 1500);
-      if (r && r.payload && r.payload.d === probe){ payload = n; break; }
-    } catch (_) { /* try smaller */ }
+    let r = null;
+    try { r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: probe }, 1500); } catch (_) {}
+    if (answered(r)) sawAnswer = true;
+    if (echoed(r, probe)){ payload = n; break; }
+    /* A clean ENOTSUP means no echo command exists; smaller will not help. */
+    if (answered(r) && r.payload && r.payload.rc !== undefined) break;
   }
+
+  const probeFn = payload
+    ? (() => { const filler = 'A'.repeat(payload);
+               return async () => echoed(await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: filler }, 1500), filler); })()
+    : async () => answered(await smp.request(OP_READ, GRP_IMAGE, ID_STATE, {}, 1500));
 
   if (!payload){
-    return { rounds: 0, ok: 0, failed: 0, payload: 0, unusable: true, clean: false,
-             crcErrors: smp.crcErrors - crc0, badLines: smp.badLines - bad0,
-             seconds: 0, kbps: 0, baudRate: smp.baudRate };
+    /* Confirm the fallback works before declaring anything. */
+    let alive = sawAnswer;
+    if (!alive){ try { alive = await probeFn(); } catch (_) { alive = false; } }
+    if (!alive){
+      return { ...base, ...tally(), rounds: 0, ok: 0, failed: 0, payload: 0,
+               echo: false, unusable: true, clean: false, seconds: 0, kbps: 0 };
+    }
   }
 
-  const filler = 'A'.repeat(payload);
   let ok = 0, failed = 0;
   const t0 = Date.now();
   for (let i = 0; i < rounds; i++){
-    try {
-      const r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: filler }, 1500);
-      if (r && r.payload && r.payload.d === filler) ok++; else failed++;
-    } catch (_) { failed++; }
+    try { if (await probeFn()) ok++; else failed++; }
+    catch (_) { failed++; }
   }
 
   const secs = (Date.now() - t0) / 1000;
+  const t = tally();
   return {
-    rounds, ok, failed, payload,
+    ...base, ...t,
+    rounds, ok, failed,
+    payload,
+    echo: payload > 0,
     unusable: false,
-    crcErrors: smp.crcErrors - crc0,
-    badLines: smp.badLines - bad0,
     seconds: secs,
-    kbps: (ok * payload * 2) / 1024 / secs,
-    baudRate: smp.baudRate,
-    clean: failed === 0 && (smp.crcErrors - crc0) === 0 && (smp.badLines - bad0) === 0,
+    kbps: payload ? (ok * payload * 2) / 1024 / secs : 0,
+    clean: failed === 0 && t.crcErrors === 0 && t.badLines === 0,
   };
 }

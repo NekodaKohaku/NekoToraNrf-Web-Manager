@@ -1,9 +1,10 @@
 {
-  "_comment": "裝置註冊表:新增產品只要加一個 entry。probeNames = 燒錄器 USB 產品名稱的開頭(較長的放前面);manifest = latest.json 路徑(相對本頁或絕對 URL);usbFilters = 瀏覽器選擇視窗的過濾條件(十進位:0x0D28=3368, 0x0204=516);versionAddr(選填)= 裝置上版本碼位址(如 UICR CUSTOMER[0] = 0x10001080 = 268439680)。",
+  "_comment": "裝置註冊表:新增產品只要加一個 entry,不必改程式。probeNames = SWD 燒錄器 USB 產品名稱的開頭(較長的放前面);dongleNames = 無線更新用 dongle 的 USB 產品名稱開頭;manifest = latest.json 路徑(相對本頁或絕對 URL);usbFilters / dongleFilters = 瀏覽器選擇視窗的過濾條件(十進位:0x0D28=3368, 0x0204=516, 0x1209=4617, 0x7690=30352);versionAddr(選填)= 裝置上版本碼位址(如 UICR CUSTOMER[0] = 0x10001080 = 268439680)。注意:WebUSB/WebHID 的 filters 只能比對 VID/PID,無法比對名稱,所以名稱過濾一律在使用者選完之後於程式內進行。",
   "devices": [
     {
       "id": "nekotora",
       "probeNames": ["NekoTora"],
+      "dongleNames": ["NekoTora Dongle", "NekoTora"],
       "name": {
         "zh": "NekoTora 追蹤器",
         "en": "NekoTora Tracker",
@@ -11,7 +12,8 @@
       },
       "chip": "nrf52840",
       "manifest": "firmware/nekotora/latest.json",
-      "usbFilters": [{"vendorId": 3368, "productId": 516}]
+      "usbFilters": [{"vendorId": 3368, "productId": 516}],
+      "dongleFilters": [{"vendorId": 4617, "productId": 30352}]
     }
   ]
 }

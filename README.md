@@ -8,13 +8,6 @@
 There are three update methods. They install the same firmware; only the route differs.
 共有三種更新方式,寫入的韌體相同,差別只在傳輸途徑。
 
-| | ワイヤレス / Wireless / 無線 | 有線 / Wired / 有線 | SWD |
-|---|---|---|---|
-| 必要なもの / Needs / 需要 | Dongle | USB-TTL | CMSIS-DAP |
-| 分解 / Disassembly / 拆機 | 不要 / No / 不用 | 不要 / No / 不用 | 必要 / Yes / 需要 |
-| 複数台 / Multiple / 多台 | ✅ | ✖ | ✖ |
-| 起動しない機体の復旧 / Revives a dead unit / 救磚 | ✖ | ✖ | ✅ |
-
 ---
 
 ## 🇯🇵 日本語:更新のしかた

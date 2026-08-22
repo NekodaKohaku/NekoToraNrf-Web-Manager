@@ -1,0 +1,19 @@
+# Later rules override earlier ones, so the catch-all goes first and the
+# firmware exceptions after it.
+
+# Source and text: normalise to LF in the repository. GitHub Pages serves these
+# directly, and mixed endings make diffs unreadable.
+* text=auto eol=lf
+
+# Firmware must never be line-ending converted.
+#
+# Git guesses text vs binary by sniffing content. It guessed right this time -
+# it offered to convert latest.json and the .hex but left the .update.bin alone
+# - but a guess is not worth relying on when the consequence is a corrupted
+# image: a .update.bin with CRLF substituted for LF fails its CRC, and a
+# mangled .hex gets written to a tracker over SWD.
+#
+# Marking them explicitly removes the guess.
+*.bin binary
+*.uf2 binary
+*.hex -text

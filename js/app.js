@@ -31,13 +31,13 @@ const $ = id => document.getElementById(id);
  * the user to choose. */
 const METHODS = {
   ota: { id: 'ota', needs: 'bin', pane: 'paneOta', name: 'mOtaName', tag: 'mOtaTag',
-         desc: 'mOtaDesc', need: 'mOtaNeed', connTitle: 'otaStepConnect',
+         desc: 'mOtaDesc', connTitle: 'otaStepConnect',
          connDesc: 'otaConnectDesc', accept: '.bin', tagAlt: false },
   dfu: { id: 'dfu', needs: 'bin', pane: 'paneDfu', name: 'mDfuName', tag: null,
-         desc: 'mDfuDesc', need: 'mDfuNeed', connTitle: 'dfuStepConnect',
+         desc: 'mDfuDesc', connTitle: 'dfuStepConnect',
          connDesc: 'dfuConnectDesc', accept: '.bin' },
   swd: { id: 'swd', needs: 'hex', pane: 'paneSwd', name: 'mSwdName', tag: 'mSwdTag',
-         desc: 'mSwdDesc', need: 'mSwdNeed', connTitle: 'step1Title',
+         desc: 'mSwdDesc', connTitle: 'step1Title',
          connDesc: 'step1Desc', accept: '.hex,.ihex', tagAlt: true },
 };
 const ORDER = ['ota', 'dfu', 'swd'];
@@ -97,11 +97,10 @@ function renderMethods(){
     b.setAttribute('aria-selected', String(id === state.method));
     b.innerHTML =
       `<div class="mName"><span></span>${m.tag ? `<span class="mTag${m.tagAlt ? ' alt' : ''}"></span>` : ''}</div>` +
-      `<div class="mDesc"></div><div class="mNeed"></div>`;
+      `<div class="mDesc"></div>`;
     b.querySelector('.mName span').textContent = t(m.name);
     if (m.tag) b.querySelector('.mTag').textContent = t(m.tag);
     b.querySelector('.mDesc').textContent = t(m.desc);
-    b.querySelector('.mNeed').textContent = t(m.need);
     b.onclick = () => selectMethod(id);
     box.appendChild(b);
   }

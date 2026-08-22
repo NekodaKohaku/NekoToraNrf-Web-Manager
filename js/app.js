@@ -10,7 +10,7 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG, OTA_MAX_PARALLEL } from './config.js';
+import { CONFIG } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
@@ -93,8 +93,9 @@ function setDetail(txt){ $('pct').textContent = txt; }
  * the failure vanish exactly when the customer needs to see which unit it was.
  */
 const P_STATE = {
-  sending: 'pSending', done: 'pArrived', verifying: 'pVerifying',
-  activating: 'pActivating', complete: 'pComplete', failed: 'pFailed',
+  queued: 'pQueued', sending: 'pSending', done: 'pArrived',
+  verifying: 'pVerifying', activating: 'pActivating',
+  complete: 'pComplete', failed: 'pFailed',
 };
 
 function renderTrackerProgress(per){
@@ -198,10 +199,7 @@ function renderTrackers(){
      * rather than about safety. */
     const eligible = tk.online && tk.info &&
                      (!want || tk.info.boardTarget === want);
-    /* The dongle relays to at most OTA_MAX_PARALLEL trackers per session, so
-     * stop the selection there rather than letting the extras time out. */
-    const atLimit = !state.selected.has(id) && state.selected.size >= OTA_MAX_PARALLEL;
-    cb.disabled = !eligible || atLimit;
+    cb.disabled = !eligible;
     if (!eligible) row.classList.add('dim');
     cb.onchange = () => {
       if (cb.checked) state.selected.add(id); else state.selected.delete(id);
@@ -254,9 +252,7 @@ function renderTrackers(){
 
 function renderSelCount(){
   const n = state.selected.size;
-  $('otaSelCount').textContent = !n ? ''
-    : n >= OTA_MAX_PARALLEL ? t('otaSelectedMax', { n, max: OTA_MAX_PARALLEL })
-    : t('otaSelected', { n });
+  $('otaSelCount').textContent = n ? t('otaSelected', { n }) : '';
 }
 
 function fwRangeText(fw){
@@ -511,21 +507,28 @@ async function scanTrackers(){
     $('otaNote').classList.add('hidden');
 
     /* Ask each awake tracker what it is running. This is what makes automatic
-     * selection possible: version comes from the tracker, not from a guess. */
+     * selection possible: the version comes from the tracker, not a guess. */
+    const outdated = [];
     for (const [id, tk] of state.trackers){
       if (!tk.online) continue;
       try { tk.info = await state.ota.queryInfo(id, 4000); }
       catch (_) { tk.info = null; }
       tk.querying = false;
-      /* Pre-select anything eligible and behind the manifest, so the common
-       * case is one click. */
       const want = state.manifest && state.manifest.boardTarget;
       if (tk.info && (!want || tk.info.boardTarget === want) &&
           state.manifest && tk.info.versionCode < state.manifest.versionCode){
-        state.selected.add(id);
+        outdated.push(id);
       }
       renderTrackers();
     }
+
+    /* Tick everything that is out of date. Updates run one tracker at a time,
+     * so there is no batch size to keep under - selecting six simply means six
+     * consecutive updates. */
+    state.selected.clear();
+    for (const id of outdated) state.selected.add(id);
+    renderTrackers();
+
     if (!state.trackers.size) $('otaNote').textContent = t('otaNoTrackers');
   } finally {
     state.busy = false;
@@ -616,42 +619,74 @@ async function runOta(fw){
   const board = (state.manifest && state.manifest.boardTarget) || '';
   makePhases(true);
 
-  const res = await state.ota.update(ids, fw, board, ev => {
-    if (ev.per) renderTrackerProgress(ev.per);
-    if (ev.stage === 'begin'){
-      setStage('otaStageBegin');
-      /* The retries are the tracker erasing slot 1, not a fault - but after the
-       * first one it is worth naming which unit everyone is waiting on, or a
-       * 20 second wait looks like a hang. */
-      setDetail(ev.attempt ? t('otaWaiting', { ids: ids.join(', ') }) : '');
-      phase('erase', 0);
-    } else if (ev.stage === 'data'){
-      setStage('otaStageData');
-      setDetail(t('otaProgress', {
-        done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1),
-      }));
-      phase('program', ev.done / ev.total);
-    } else if (ev.stage === 'verify'){
-      setStage('otaStageVerify'); setDetail(''); phase('verify', 0.5);
-    } else if (ev.stage === 'activate'){
-      setStage('otaStageActivate'); setDetail(''); phase('reset', 0.5);
+  /* One tracker at a time. See OTA_SEQUENTIAL in config.js for why: the
+   * dongle's ring is shared and paced by the slowest target, so parallel
+   * updates degrade sharply rather than gracefully.
+   *
+   * Rows for the whole batch are kept here and merged with whatever the
+   * current update reports, so finished and queued trackers stay on screen
+   * instead of the list collapsing to one row at a time. */
+  const batch = new Map(ids.map(id => [id, { id, pct: 0, state: 'queued' }]));
+  const paint = () => renderTrackerProgress([...batch.values()]);
+  paint();
+
+  const ok = [], failed = [];
+
+  for (let i = 0; i < ids.length; i++){
+    const id = ids[i];
+    const label = { i: i + 1, n: ids.length, id };
+    batch.set(id, { id, pct: 0, state: 'sending' });
+
+    const res = await state.ota.update([id], fw, board, ev => {
+      if (ev.per && ev.per.length){
+        const r = ev.per.find(x => x.id === id);
+        if (r) batch.set(id, { ...r, id });
+      }
+      if (ev.stage === 'begin'){
+        setStage('otaStageBegin');
+        setDetail(ids.length > 1 ? t('otaBatch', label) : '');
+      } else if (ev.stage === 'data'){
+        setStage('otaStageData');
+        setDetail(ids.length > 1
+          ? t('otaBatch', label) + ' · ' + t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) })
+          : t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) }));
+      } else if (ev.stage === 'verify'){
+        setStage('otaStageVerify');
+      } else if (ev.stage === 'activate'){
+        setStage('otaStageActivate');
+      }
+      /* The shared bar spans the whole batch: whole trackers already done,
+       * plus how far the current one has got. */
+      const within = ev.stage === 'data' && ev.total ? ev.done / ev.total
+                   : ev.stage === 'verify' ? 0.95
+                   : ev.stage === 'activate' || ev.stage === 'done' ? 1
+                   : 0;
+      setBar((i + within) / ids.length);
+      paint();
+    });
+
+    if (res.ok.length){
+      ok.push(id);
+      batch.set(id, { id, pct: 1, state: 'complete' });
+    } else {
+      const e = res.failed.length ? res.failed[0].error : mkErr('errOtaNoReady');
+      failed.push({ id, error: e });
+      batch.set(id, { id, pct: 0, state: 'failed', error: e });
     }
-  });
+    paint();
+  }
 
   setBar(1);
-  if (!res.ok.length){
-    const e = res.failed.length ? res.failed[0].error : mkErr('errOtaNoReady');
-    e.i18nParams = e.i18nParams || {};
-    throw e;
-  }
+  if (!ok.length) throw (failed.length ? failed[0].error : mkErr('errOtaNoReady'));
+
   $('okTitle').textContent = t('success');
-  $('okHint').textContent = res.failed.length
-    ? t('otaPartial', { ok: res.ok.length, fail: res.failed.length })
-    : t('otaOkHint');
+  $('okHint').textContent = failed.length
+    ? t('otaPartial', { ok: ok.length, fail: failed.length })
+    : ids.length > 1 ? t('otaAllDone', { n: ok.length }) : t('otaOkHint');
   showView('ok');
   /* Versions on screen are now stale - the trackers rebooted into new
-   * firmware. Re-reading them costs a couple of seconds and avoids showing an
-   * "update available" badge for something just updated. */
+   * firmware. Re-reading them avoids showing "update available" for something
+   * just updated. */
   setTimeout(() => { scanTrackers().catch(() => {}); }, 3000);
 }
 
@@ -762,8 +797,7 @@ async function init(){
   $('btnSelectAll').onclick = () => {
     const eligible = [...state.trackers].filter(([, tk]) => tk.online && tk.info).map(([id]) => id);
     const all = eligible.every(id => state.selected.has(id));
-    // "select all" cannot exceed what the dongle can relay in one session
-    state.selected = new Set(all ? [] : eligible.slice(0, OTA_MAX_PARALLEL));
+    state.selected = new Set(all ? [] : eligible);
     renderTrackers(); gate();
   };
 

@@ -46,11 +46,21 @@ export const DEFAULT_DEVICES = {
  */
 export const METHODS = ['ota', 'dfu', 'swd'];
 
-/* OTA_MAX_PARALLEL in the dongle's src/esb_ota.h.
+/* Trackers are updated one at a time, not in parallel.
  *
- * A BEGIN for a fifth tracker hits `break` in esb_ota_relay_process_hid and
- * sends nothing back - no error, no status. The updater would sit through the
- * full BEGIN timeout and then report "no response", which points at the
- * tracker when the real answer is that the dongle only relays four at a time.
- * Cap the selection instead. */
-export const OTA_MAX_PARALLEL = 4;
+ * The dongle can relay to four at once (OTA_MAX_PARALLEL in its
+ * src/esb_ota.h), but the 128-packet ring is shared and the producer may not
+ * write past min_seq + RING_SIZE, where min_seq is the *slowest* target's
+ * cursor. So the window advances at the rate of the worst tracker, and the
+ * chance that at least one of N is momentarily retrying climbs quickly with N.
+ * Once the window pins, the PC cannot push, which triggers a replay, which
+ * slows everyone further - the failure mode compounds rather than adding up.
+ *
+ * Measured on hardware: one tracker is fast, two middling, three slow but
+ * reliable, four never completed. That is a cliff, not a gradient, and a
+ * shipped product cannot sit next to it.
+ *
+ * Sequential costs roughly N x 20 s and never falls off anything. For a
+ * customer, a predictable minute beats an unpredictable failure.
+ */
+export const OTA_SEQUENTIAL = true;

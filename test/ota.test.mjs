@@ -15,7 +15,13 @@ class FakeDevice {
     // Trackers report progress periodically, which is what unblocks the
     // client when its in-flight window is full.
     this.progress = setInterval(() => {
-      for (const [tid, s] of this.st) if (s.ready) this._status(tid, ST.RECEIVING);
+      for (const [tid, s] of this.st) {
+        if (!s.ready) continue;
+        // a tracker that has left the air reports nothing at all - which is
+        // exactly why a terminal-status-only drop rule never noticed it
+        if (this.o.silentAfter && this.o.silentTracker === tid && s.next > this.o.silentAfter) continue;
+        this._status(tid, ST.RECEIVING);
+      }
     }, 20);
     this.telemetry = setInterval(() => {
       const f = new Uint8Array(64);
@@ -47,10 +53,12 @@ class FakeDevice {
       setTimeout(() => { s.ready = true; this._status(id, ST.READY); }, this.o.eraseMs);
     } else if (type === HID.DATA){
       const seq = dv.getUint16(2, false);
-      if (this.o.dieAfter && seq > this.o.dieAfter) return;   // tracker gone
+      if (this.o.dieAfter && seq > this.o.dieAfter) return;   // whole link gone
       if (Math.random() < this.o.dropRate) return;
       for (const [tid, s] of this.st){
         if (!s.ready) continue;
+        // one tracker walks out of range partway through; the rest are fine
+        if (this.o.silentAfter && this.o.silentTracker === tid && seq > this.o.silentAfter) continue;
         if (seq === s.next){ s.buf.push(...p.subarray(4, 64)); s.next++; }
       }
       // real firmware reports progress on its own cadence, not per packet
@@ -92,6 +100,8 @@ all &= await run('three trackers in parallel', { trackers: [0, 4, 9] }, image, B
 all &= await run('0.2% HID loss (realistic)', { trackers: [4], dropRate: 0.002 }, image, BOARD, [4]);
 all &= await run('2% HID loss (stress)', { trackers: [4], dropRate: 0.02 }, image, BOARD, [4]);
 all &= await run('link dies mid-transfer', { trackers: [4], dieAfter: 200 }, image, BOARD, []);
+all &= await run('one of three goes silent -> others still finish',
+                 { trackers: [0, 4, 9], silentTracker: 4, silentAfter: 150 }, image, BOARD, [0, 9]);
 all &= await run('slow slot-1 erase (8s)', { trackers: [4], eraseMs: 8000 }, image, BOARD, [4]);
 all &= await run('wrong board target rejected', { trackers: [4] }, image, 'test54l/nrf54l15/cpuapp', []);
 all &= await run('corrupt image fails VERIFY', { trackers: [4] },

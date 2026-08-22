@@ -87,6 +87,20 @@ main{max-width:820px;margin:0 auto;padding:8px 20px 48px}
 #pct{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .bar{height:14px;background:var(--border);border-radius:999px;overflow:hidden}
 .bar>div{height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#3b82f6);transition:width .2s}
+/* One row per tracker during a wireless update. The image is streamed once and
+   fanned out, so the shared bar above shows how much has been sent while these
+   show how far each tracker has actually consumed - which is where they differ
+   when one falls behind or drops out. */
+.trkProgress{margin-top:14px;display:flex;flex-direction:column;gap:9px}
+.tp{display:flex;align-items:center;gap:10px;font-size:13px}
+.tp .tpName{flex:none;min-width:6.5em;font-weight:600}
+.tp .tpBar{flex:1;height:8px;background:var(--border);border-radius:999px;overflow:hidden}
+.tp .tpBar>div{height:100%;width:0;border-radius:999px;background:var(--primary);transition:width .2s}
+.tp .tpState{flex:none;min-width:6em;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.tp.complete .tpBar>div{background:var(--ok)}
+.tp.complete .tpState{color:var(--ok)}
+.tp.failed .tpBar>div{background:var(--err);width:100%!important;opacity:.35}
+.tp.failed .tpState{color:var(--err)}
 .holdRemind{margin-top:12px;color:var(--err);font-weight:700;font-size:14px;text-align:center;animation:pulse 1.2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
 .result{text-align:center;padding:8px 0 4px}
@@ -198,13 +212,14 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
     <div class="stepHead"><span class="stepNum">4</span><h2 data-i18n="step3Title"></h2></div>
     <div id="preUpdate">
       <div class="holdBox hidden" id="holdBox"><span class="ico">⚠️</span><span data-i18n="holdWarn"></span></div>
-      <button id="btnStart" class="btn primary big" data-i18n="start"></button>
+      <button id="btnStart" class="btn primary big"></button>
     </div>
     <div id="progressArea" class="hidden">
       <div class="progressWrap">
         <div class="stageRow"><span id="stageLabel"></span><span id="pct">0%</span></div>
         <div class="bar"><div id="barFill"></div></div>
       </div>
+      <div class="trkProgress hidden" id="trkProgress"></div>
       <div class="holdRemind hidden" id="holdRemind" data-i18n="holdDuring"></div>
     </div>
     <div id="resultOk" class="result ok hidden">

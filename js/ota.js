@@ -356,11 +356,35 @@ export class OtaClient {
 
     /* ---- 2. DATA -------------------------------------------------- */
     const nextSeq = new Map(active.map(id => [id, 0]));
-    const consumed = () => Math.min(...active.map(id => nextSeq.get(id) || 0));
+    const consumed = () => (active.length ? Math.min(...active.map(id => nextSeq.get(id) || 0)) : total);
 
     let sent = 0, warmup = true, retransmits = 0, refills = 0, ringCount = 0;
     const started = Date.now();
     const overallEnd = started + 180000;
+
+    /* Per-tracker liveness.
+     *
+     * Progress is the slowest tracker's cursor, because the image is streamed
+     * once and fanned out - so one tracker that stops answering pins the whole
+     * batch. It never leaves `active` either: only a tracker that reports a
+     * terminal status is removed, and a unit that has simply gone out of range
+     * reports nothing at all. The result was that one straggler failed every
+     * other tracker in the batch, including ones that were nearly finished.
+     *
+     * Give up on a tracker individually instead. Twenty seconds is generous:
+     * all targets consume the same over-the-air data, so in normal operation
+     * their cursors sit within a few hundred milliseconds of each other. A gap
+     * that large means the unit is gone, not slow. */
+    const PER_TRACKER_STALL_MS = 20000;
+    const lastAdvance = new Map(active.map(id => [id, started]));
+
+    const dropTracker = (id, error) => {
+      failed.push({ id, error });
+      active = active.filter(x => x !== id);
+      nextSeq.delete(id);
+      lastAdvance.delete(id);
+      this.d.abort(id).catch(() => {});   // let the dongle release its cursor
+    };
 
     const absorb = () => {
       for (const r of this.d.drain()){
@@ -369,82 +393,79 @@ export class OtaClient {
         if (!st) continue;
         if (TERMINAL.has(st.status)){
           log(`tracker ${st.trackerId}: ${st.statusName}`, 'err');
-          failed.push({ id: st.trackerId, error: statusError(st.status) });
-          active = active.filter(x => x !== st.trackerId);
-          nextSeq.delete(st.trackerId);
+          dropTracker(st.trackerId, statusError(st.status));
           continue;
         }
+        if (st.nextSeq > (nextSeq.get(st.trackerId) || 0)) lastAdvance.set(st.trackerId, Date.now());
         nextSeq.set(st.trackerId, st.nextSeq);
         ringCount = st.ringCount;
         warmup = false;
       }
     };
 
+    /* Snapshot for the UI: one entry per tracker in the batch, finished and
+     * failed ones included, so rows do not disappear mid-update. */
+    const snapshot = () => {
+      const rows = [];
+      for (const id of trackerIds){
+        const f = failed.find(x => x.id === id);
+        if (f){ rows.push({ id, done: 0, total, pct: 0, state: 'failed', error: f.error }); continue; }
+        if (!active.includes(id)) continue;
+        const seq = Math.min(nextSeq.get(id) || 0, total);
+        rows.push({
+          id, done: seq, total,
+          pct: total ? seq / total : 0,
+          bytes: Math.min(seq * DATA_MAX_PAYLOAD, size),
+          state: seq >= total ? 'done' : 'sending',
+        });
+      }
+      return rows.sort((a, b) => a.id - b.id);
+    };
+
     const report = () => {
       const done = Math.min(consumed(), total);
       const bytes = Math.min(done * DATA_MAX_PAYLOAD, size);
       const secs = (Date.now() - started) / 1000;
-      onEvent({ stage: 'data', done, total, bytes, size, speed: secs > 0 ? bytes / secs / 1024 : 0 });
+      onEvent({ stage: 'data', done, total, bytes, size,
+                speed: secs > 0 ? bytes / secs / 1024 : 0, per: snapshot() });
     };
 
-    /* One loop drives the whole transfer, because sending and gap-filling are
-     * not separable phases. A packet lost on the HID path stops the slowest
-     * tracker's cursor dead, so the in-flight window (sent - consumed) stays
-     * pinned at its limit and `sent` never reaches `total` - meaning a
-     * "stream, then gap-fill" structure never leaves the streaming half. The
-     * Python tool this was ported from is shaped that way and would sit on a
-     * full window until its overall timeout rather than replaying the gap.
-     *
-     * Instead: keep the window topped up whenever there is room, and treat a
-     * lack of progress as the signal to act. Which action depends on where the
-     * missing bytes are:
-     *
-     *   ringCount > 0  the dongle still holds packets and is retransmitting
-     *                  over the air by itself. Waiting is correct; resending
-     *                  would only push the ring towards overflow.
-     *   ringCount == 0 the dongle has nothing left to deliver, yet the tracker
-     *                  is short. Those bytes never arrived over USB and exist
-     *                  nowhere but here, so rewind and replay from the gap.
-     */
-    /* Once the ring reads empty and the tracker is short, the gap is certain -
-     * there is nothing left in flight to close it. The wait is only long
-     * enough for a STATUS newer than the last burst to have arrived, so that
-     * ringCount is not being read stale; beyond that, waiting just adds dead
-     * time to every recovery. */
     const REFILL_AFTER_MS = 800;
-    const GIVE_UP_AFTER_MS = 15000;  // no progress at all, ring or not -> stop
-    /* Bounded by wasted work rather than a fixed count: a link losing the
-     * occasional packet should keep going, while one losing most of them
-     * should stop instead of grinding through the full timeout. */
     const MAX_RETRANSMIT = total * 4;
-
     let lastConsumed = -1, lastProgress = Date.now(), gaveUp = false;
 
     while (consumed() < total && active.length && Date.now() < overallEnd && !gaveUp){
-      const now = consumed();
-      if (now !== lastConsumed){ lastConsumed = now; lastProgress = Date.now(); }
+      /* Retire anyone who has stopped moving while the batch continues. A
+       * tracker already at `total` cannot advance further, so it is exempt. */
+      const now = Date.now();
+      for (const id of [...active]){
+        if ((nextSeq.get(id) || 0) >= total) continue;
+        if (now - (lastAdvance.get(id) || now) > PER_TRACKER_STALL_MS){
+          log(`tracker ${id}: no progress for ${PER_TRACKER_STALL_MS / 1000}s, dropping`, 'err');
+          dropTracker(id, mkErr('errOtaStalled'));
+        }
+      }
+      if (!active.length){ gaveUp = true; break; }
+
+      const cur = consumed();
+      if (cur !== lastConsumed){ lastConsumed = cur; lastProgress = Date.now(); }
       const idleMs = Date.now() - lastProgress;
 
-      if (idleMs > GIVE_UP_AFTER_MS){
-        log(`transfer stalled at ${now}/${total} (ring=${ringCount})`, 'err');
-        gaveUp = true;
-        break;
-      }
-      if (idleMs > REFILL_AFTER_MS && ringCount === 0 && sent > now){
+      if (idleMs > REFILL_AFTER_MS && ringCount === 0 && sent > cur){
         refills++;
         if (retransmits > MAX_RETRANSMIT){
           log(`giving up after ${retransmits} retransmitted packets`, 'err');
           gaveUp = true;
           break;
         }
-        log(`replay #${refills}: resending from seq ${now} (${total - now} left)`, 'warn');
-        retransmits += sent - now;
-        sent = now;
+        log(`replay #${refills}: resending from seq ${cur} (${total - cur} left)`, 'warn');
+        retransmits += sent - cur;
+        sent = cur;
         warmup = false;
         lastProgress = Date.now();
       }
 
-      const inFlight = sent - now;
+      const inFlight = sent - cur;
       if (sent < total && inFlight < MAX_IN_FLIGHT){
         const burst = Math.min(warmup ? WARMUP_BURST : BURST_SIZE, MAX_IN_FLIGHT - inFlight);
         for (let i = 0; i < burst && sent < total; i++){
@@ -454,14 +475,15 @@ export class OtaClient {
         }
         await this.d._traffic(warmup ? 50 : 5);
       } else {
-        /* Nothing to send: either everything is out or the window is full.
-         * Wait on the tracker rather than spinning. */
         await this.d._traffic(100);
       }
       absorb();
       report();
     }
 
+    /* Order matters: consumed() reports `total` once active is empty, so the
+     * emptiness check has to come first or a wiped-out batch would look like a
+     * completed one. */
     if (!active.length){ await this.d.abort(0xFF); return { ok: [], failed }; }
     if (consumed() < total){
       for (const id of active) failed.push({ id, error: mkErr('errOtaStalled') });
@@ -471,11 +493,27 @@ export class OtaClient {
 
     const secs = (Date.now() - started) / 1000;
     log(`transfer complete: ${(size / 1024).toFixed(1)} KB in ${secs.toFixed(1)}s ` +
-        `(${(size / secs / 1024).toFixed(1)} KB/s)` +
-        (retransmits ? `, ${retransmits} retransmitted` : ''));
+        `(${(size / secs / 1024).toFixed(1)} KB/s) to ${active.length} tracker(s)` +
+        (retransmits ? `, ${retransmits} retransmitted` : '') +
+        (failed.length ? `, ${failed.length} dropped` : ''));
 
     /* ---- 3. VERIFY ------------------------------------------------ */
-    onEvent({ stage: 'verify' });
+    /* Rows for the remaining phases. Trackers keep their place in the list
+     * once they drop out, so the customer can see which one failed and why
+     * instead of watching it silently vanish. */
+    const phaseRows = (state) => {
+      const rows = [];
+      for (const id of trackerIds){
+        const f = failed.find(x => x.id === id);
+        if (f) rows.push({ id, pct: 0, state: 'failed', error: f.error });
+        else if (ok.includes(id)) rows.push({ id, pct: 1, state: 'complete' });
+        else if (active.includes(id)) rows.push({ id, pct: 1, state });
+      }
+      return rows.sort((a, b) => a.id - b.id);
+    };
+    const ok = [];
+
+    onEvent({ stage: 'verify', per: phaseRows('verifying') });
     await sleep(500);
     this.d.drain();
     for (const id of active){ await this.d.verify(id); await sleep(50); }
@@ -491,10 +529,11 @@ export class OtaClient {
       else if (st.status !== ST.VERIFY_OK){ failed.push({ id, error: statusError(st.status) }); log(`tracker ${id}: verify failed (${st.statusName})`, 'err'); }
       else { verified.push(id); log(`tracker ${id}: CRC32 verified`); }
     }
+    active = verified.slice();
     if (!verified.length){ await this.d.abort(0xFF); return { ok: [], failed }; }
 
     /* ---- 4. ACTIVATE ---------------------------------------------- */
-    onEvent({ stage: 'activate' });
+    onEvent({ stage: 'activate', per: phaseRows('activating') });
     this.d.drain();
     for (const id of verified){ await this.d.activate(id); await sleep(50); }
 
@@ -502,12 +541,13 @@ export class OtaClient {
       verified, new Set([ST.COMPLETE, ST.ERROR, ST.FLASH_ERROR]),
       { timeoutMs: 20000, resend: id => this.d.activate(id), resendMs: 3000 },
     );
-    const ok = [];
     for (const id of verified){
       const st = ares.get(id);
       if (st && st.status === ST.COMPLETE){ ok.push(id); log(`tracker ${id}: activated, rebooting`); }
       else { failed.push({ id, error: st ? statusError(st.status) : mkErr('errOtaActivate', { st: 'no response' }) }); }
     }
+    active = ok.slice();
+    onEvent({ stage: 'done', per: phaseRows('complete') });
     return { ok, failed };
   }
 }

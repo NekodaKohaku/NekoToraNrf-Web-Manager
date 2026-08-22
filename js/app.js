@@ -83,6 +83,51 @@ function setStage(key, params){
 }
 function setDetail(txt){ $('pct').textContent = txt; }
 
+/* Per-tracker progress rows.
+ *
+ * Rows are keyed by tracker id and reused rather than rebuilt, so the CSS width
+ * transition animates instead of restarting on every status packet - which
+ * arrives several times a second.
+ *
+ * A tracker that drops out keeps its row and turns red. Removing it would make
+ * the failure vanish exactly when the customer needs to see which unit it was.
+ */
+const P_STATE = {
+  sending: 'pSending', done: 'pArrived', verifying: 'pVerifying',
+  activating: 'pActivating', complete: 'pComplete', failed: 'pFailed',
+};
+
+function renderTrackerProgress(per){
+  const box = $('trkProgress');
+  if (!per || !per.length){ box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+
+  const seen = new Set();
+  for (const row of per){
+    seen.add(row.id);
+    let el = box.querySelector(`[data-tid="${row.id}"]`);
+    if (!el){
+      el = document.createElement('div');
+      el.className = 'tp';
+      el.dataset.tid = row.id;
+      el.innerHTML = '<span class="tpName"></span><span class="tpBar"><div></div></span><span class="tpState"></span>';
+      el.querySelector('.tpName').textContent = t('otaTracker', { id: row.id });
+      box.appendChild(el);
+    }
+    el.className = 'tp' + (row.state === 'failed' ? ' failed'
+                        : row.state === 'complete' ? ' complete' : '');
+    el.querySelector('.tpBar > div').style.width =
+      Math.round(Math.max(0, Math.min(1, row.pct || 0)) * 100) + '%';
+    el.querySelector('.tpState').textContent = row.state === 'failed' && row.error
+      ? t('pFailed')
+      : t(P_STATE[row.state] || 'pSending');
+    el.title = row.state === 'failed' && row.error ? errText(row.error) : '';
+  }
+  for (const el of [...box.children]){
+    if (!seen.has(Number(el.dataset.tid))) el.remove();
+  }
+}
+
 /* ============================ rendering ============================== */
 
 function renderMethods(){
@@ -272,8 +317,21 @@ function gate(){
   $('card3').classList.toggle('disabled', !connected() || state.busy);
   $('card4').classList.toggle('disabled', !connected() || state.busy);
   $('btnStart').disabled = !readyToStart() || state.busy;
-  $('holdBox').classList.toggle('hidden', state.method !== 'swd');
-  $('holdRemind').classList.toggle('hidden', state.method !== 'swd');
+
+  /* Holding the button down is an SWD-only requirement: it is what keeps the
+   * tracker powered while the probe drives it. Wireless and wired updates go
+   * through the running firmware, so the tracker powers itself and there is
+   * nothing to hold. Saying otherwise on those two tabs tells the customer to
+   * do something pointless - and worse, implies the update needs physical
+   * access, which is exactly what the wireless path avoids.
+   *
+   * The button label is set here rather than with data-i18n because it varies
+   * by method; applyLang() runs before refresh() on a language change, so this
+   * still ends up in the right language. */
+  const swd = state.method === 'swd';
+  $('btnStart').textContent = t(swd ? 'start' : 'startPlain');
+  $('holdBox').classList.toggle('hidden', !swd);
+  $('holdRemind').classList.toggle('hidden', !swd);
 }
 
 function showView(v){
@@ -527,6 +585,7 @@ async function start(){
   showView('progress');
   setBar(0);
   $('errDetail').textContent = '';
+  renderTrackerProgress(null);
 
   try {
     const fw = await resolveImage();
@@ -535,7 +594,9 @@ async function start(){
     else await runSwd(fw);
   } catch (e){
     log('update failed: ' + errText(e), 'err');
-    $('badHint').textContent = t(state.method === 'swd' ? 'failHint' : 'failHint');
+    /* The SWD failure advice is about the button and re-plugging USB, which
+     * only makes sense for SWD. */
+    $('badHint').textContent = t(state.method === 'swd' ? 'failHint' : 'failHintPlain');
     $('errDetail').textContent = errText(e);
     showView('bad');
   } finally {
@@ -550,9 +611,13 @@ async function runOta(fw){
   makePhases(true);
 
   const res = await state.ota.update(ids, fw, board, ev => {
+    if (ev.per) renderTrackerProgress(ev.per);
     if (ev.stage === 'begin'){
       setStage('otaStageBegin');
-      setDetail('');
+      /* The retries are the tracker erasing slot 1, not a fault - but after the
+       * first one it is worth naming which unit everyone is waiting on, or a
+       * 20 second wait looks like a hang. */
+      setDetail(ev.attempt ? t('otaWaiting', { ids: ids.join(', ') }) : '');
       phase('erase', 0);
     } else if (ev.stage === 'data'){
       setStage('otaStageData');

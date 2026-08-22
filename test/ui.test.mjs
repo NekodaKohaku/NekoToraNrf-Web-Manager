@@ -120,5 +120,36 @@ check('no "detected" banner before connecting', !detectedVisible(),
       'text was: ' + txt('devDetected'));
 check('manifest still prefetched anyway', txt('fwStatus') === '1.4.2', txt('fwStatus'));
 
+
+// --- holding the button is SWD-only ----------------------------------------
+// The label used to be a static data-i18n="start", so every method told the
+// customer to hold a button - including wireless, which needs no physical
+// access at all.
+const setMethod = async n => {
+  [...$('methods').children][n].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 120));
+};
+const holdShown = () => !$('holdBox').classList.contains('hidden');
+
+await setMethod(0);  // wireless
+check('wireless: button label has no "hold"', !/按住|holding|押したまま/.test(txt('btnStart')), txt('btnStart'));
+check('wireless: no hold warning box', !holdShown());
+
+await setMethod(1);  // wired
+check('wired: button label has no "hold"', !/按住|holding|押したまま/.test(txt('btnStart')), txt('btnStart'));
+check('wired: no hold warning box', !holdShown());
+
+await setMethod(2);  // SWD
+check('SWD: button label does say hold', /按住|holding|押したまま/.test(txt('btnStart')), txt('btnStart'));
+check('SWD: hold warning box shown', holdShown());
+
+// label must survive a language change
+$('langSel').value = 'ja';
+$('langSel').dispatchEvent(new window.Event('change'));
+await new Promise(r => setTimeout(r, 120));
+check('SWD label follows language', /押したまま/.test(txt('btnStart')), txt('btnStart'));
+await setMethod(0);
+check('wireless label follows language', txt('btnStart') === '更新を開始', txt('btnStart'));
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

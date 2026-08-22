@@ -10,7 +10,7 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG } from './config.js';
+import { CONFIG, OTA_MAX_PARALLEL } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
@@ -198,7 +198,10 @@ function renderTrackers(){
      * rather than about safety. */
     const eligible = tk.online && tk.info &&
                      (!want || tk.info.boardTarget === want);
-    cb.disabled = !eligible;
+    /* The dongle relays to at most OTA_MAX_PARALLEL trackers per session, so
+     * stop the selection there rather than letting the extras time out. */
+    const atLimit = !state.selected.has(id) && state.selected.size >= OTA_MAX_PARALLEL;
+    cb.disabled = !eligible || atLimit;
     if (!eligible) row.classList.add('dim');
     cb.onchange = () => {
       if (cb.checked) state.selected.add(id); else state.selected.delete(id);
@@ -250,7 +253,10 @@ function renderTrackers(){
 }
 
 function renderSelCount(){
-  $('otaSelCount').textContent = state.selected.size ? t('otaSelected', { n: state.selected.size }) : '';
+  const n = state.selected.size;
+  $('otaSelCount').textContent = !n ? ''
+    : n >= OTA_MAX_PARALLEL ? t('otaSelectedMax', { n, max: OTA_MAX_PARALLEL })
+    : t('otaSelected', { n });
 }
 
 function fwRangeText(fw){
@@ -756,7 +762,8 @@ async function init(){
   $('btnSelectAll').onclick = () => {
     const eligible = [...state.trackers].filter(([, tk]) => tk.online && tk.info).map(([id]) => id);
     const all = eligible.every(id => state.selected.has(id));
-    state.selected = new Set(all ? [] : eligible);
+    // "select all" cannot exceed what the dongle can relay in one session
+    state.selected = new Set(all ? [] : eligible.slice(0, OTA_MAX_PARALLEL));
     renderTrackers(); gate();
   };
 

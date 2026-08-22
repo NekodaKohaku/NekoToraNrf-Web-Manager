@@ -45,3 +45,12 @@ export const DEFAULT_DEVICES = {
  *             bootloader is gone - which is why it stays available.
  */
 export const METHODS = ['ota', 'dfu', 'swd'];
+
+/* OTA_MAX_PARALLEL in the dongle's src/esb_ota.h.
+ *
+ * A BEGIN for a fifth tracker hits `break` in esb_ota_relay_process_hid and
+ * sends nothing back - no error, no status. The updater would sit through the
+ * full BEGIN timeout and then report "no response", which points at the
+ * tracker when the real answer is that the dongle only relays four at a time.
+ * Cap the selection instead. */
+export const OTA_MAX_PARALLEL = 4;

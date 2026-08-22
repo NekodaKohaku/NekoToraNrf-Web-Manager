@@ -151,6 +151,12 @@ export class SmpPort {
     this.pktExpect = 0;
     this.reading = false;
     this.dec = new TextDecoder('utf-8', { fatal: false });
+    /* Wire-quality counters. A baud rate that is too fast for the link does
+     * not fail cleanly - it corrupts the odd byte, which shows up here as a
+     * CRC mismatch or an undecodable line. Counting them turns "is this rate
+     * safe?" into a number instead of a hunch. */
+    this.crcErrors = 0;
+    this.badLines = 0;
   }
 
   async open(){
@@ -209,7 +215,7 @@ export class SmpPort {
       const bin = atob(s);
       dec = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) dec[i] = bin.charCodeAt(i);
-    } catch (_) { return; }
+    } catch (_) { this.badLines++; return; }
 
     if (isFirst){
       this.pktExpect = (dec[0] << 8) | dec[1];
@@ -225,7 +231,7 @@ export class SmpPort {
     this.pktBuf = null;
     const data = all.slice(0, all.length - 2);
     const rxc = (all[all.length - 2] << 8) | all[all.length - 1];
-    if (crc16(data) !== rxc){ log('SMP: CRC mismatch', 'warn'); return; }
+    if (crc16(data) !== rxc){ this.crcErrors++; log('SMP: CRC mismatch', 'warn'); return; }
     this._handleSmp(data);
   }
 
@@ -323,7 +329,8 @@ export const DFU_CHUNK_SIZE = 512;
 
 export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onProgress = null } = {}){
   const t0 = Date.now();
-  let off = 0, retries = 0;
+  const crc0 = smp.crcErrors, bad0 = smp.badLines;
+  let off = 0, retries = 0, totalRetries = 0;
 
   while (off < bytes.length){
     const chunk = bytes.slice(off, off + chunkSize);
@@ -338,6 +345,7 @@ export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onPr
     try {
       rsp = await smp.request(OP_WRITE, GRP_IMAGE, ID_UPLOAD, req, 5000);
     } catch (e){
+      totalRetries++;
       if (++retries > 5) throw mkErr('errDfuUpload', { err: 'timeout at ' + off });
       log(`DFU: retry ${retries}/5 at offset ${off}`, 'warn');
       continue;
@@ -357,8 +365,62 @@ export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onPr
     }
   }
 
-  log(`DFU: ${(bytes.length / 1024).toFixed(1)} KB in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  const secs = (Date.now() - t0) / 1000;
+  const stats = {
+    bytes: bytes.length,
+    chunks: Math.ceil(bytes.length / chunkSize),
+    seconds: secs,
+    kbps: bytes.length / 1024 / secs,
+    retries: totalRetries,
+    crcErrors: smp.crcErrors - crc0,
+    badLines: smp.badLines - bad0,
+    baudRate: smp.baudRate,
+  };
+  log(`DFU: ${(stats.bytes / 1024).toFixed(1)} KB in ${secs.toFixed(1)}s ` +
+      `(${stats.kbps.toFixed(1)} KB/s) at ${stats.baudRate} baud, ` +
+      `${stats.chunks} chunks, ${stats.retries} retries, ${stats.crcErrors} CRC errors`,
+      (stats.retries || stats.crcErrors) ? 'warn' : undefined);
+  if (stats.retries || stats.crcErrors){
+    log('DFU: a clean link retries zero times. Errors here mean this baud rate ' +
+        'is at or past what the wiring and adapter can carry - drop one step.', 'warn');
+  }
+
   /* The reset request usually gets no reply, because the device reboots before
    * it can send one. That is success, not failure. */
   try { await smp.reset(); } catch (_) {}
+  return stats;
+}
+
+/* Probe link quality before committing to a long upload.
+ *
+ * Sends echo requests carrying a payload comparable to a real firmware chunk
+ * and counts what comes back intact. A marginal baud rate does not refuse to
+ * work - it drops the occasional byte, so the only honest test is volume.
+ *
+ * Cheap: a couple of seconds against an upload that runs for a minute, and it
+ * fails in a way that costs nothing rather than halfway through writing flash.
+ */
+export async function linkTest(smp, { rounds = 20, payload = 256 } = {}){
+  const filler = 'A'.repeat(payload);
+  const crc0 = smp.crcErrors, bad0 = smp.badLines;
+  let ok = 0, failed = 0;
+  const t0 = Date.now();
+
+  for (let i = 0; i < rounds; i++){
+    try {
+      const r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: filler }, 1500);
+      if (r && r.payload && r.payload.d === filler) ok++; else failed++;
+    } catch (_) { failed++; }
+  }
+
+  const secs = (Date.now() - t0) / 1000;
+  return {
+    rounds, ok, failed,
+    crcErrors: smp.crcErrors - crc0,
+    badLines: smp.badLines - bad0,
+    seconds: secs,
+    kbps: (ok * payload * 2) / 1024 / secs,   // echoed both ways
+    baudRate: smp.baudRate,
+    clean: failed === 0 && (smp.crcErrors - crc0) === 0 && (smp.badLines - bad0) === 0,
+  };
 }

@@ -18,7 +18,7 @@ import { parseUpdateBin, looksLikeUpdateBin } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
 import { Dongle, OtaClient } from './ota.js';
-import { SmpPort, enterRecovery, isInRecovery, uploadImage } from './smp.js';
+import { SmpPort, enterRecovery, isInRecovery, uploadImage, linkTest } from './smp.js';
 import * as reg from './registry.js';
 
 const $ = id => document.getElementById(id);
@@ -607,8 +607,21 @@ async function doEnterRecovery(){
   try {
     const ok = await enterRecovery(state.smp, { timeoutMs: 30000 });
     state.inRecovery = ok;
-    if (!ok) connFail(mkErr('errDfuNoResponse'));
-    else $('connErr').classList.add('hidden');
+    if (!ok){ connFail(mkErr('errDfuNoResponse')); return; }
+    $('connErr').classList.add('hidden');
+
+    /* Now that something is answering, measure the link before trusting it
+     * with a minute-long upload. A baud rate that is too fast for the wiring
+     * or the USB-serial adapter does not fail cleanly - it corrupts occasional
+     * bytes - so the test sends real volume and counts what survives. */
+    const r = await linkTest(state.smp);
+    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok, ${r.crcErrors} CRC errors, ` +
+        `${r.kbps.toFixed(1)} KB/s`, r.clean ? undefined : 'warn');
+    $('dfuLink').classList.remove('hidden');
+    $('dfuLink').textContent = r.clean
+      ? t('dfuLinkOk', { baud: r.baudRate, kbps: r.kbps.toFixed(1) })
+      : t('dfuLinkBad', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds });
+    $('dfuLink').style.color = r.clean ? 'var(--ok)' : 'var(--warn)';
   } finally {
     $('btnEnterDfu').disabled = false;
     state.busy = false;

@@ -140,5 +140,44 @@ const worst = cborEncode({ image: 0, len: 400000, off: 400000, data: new Uint8Ar
 const datagram = 8 + worst.length + 2;
 check('request fits BOOT_SERIAL_MAX_RECEIVE_SIZE (1024)', datagram <= 1024, datagram + ' bytes');
 
+/* --- link quality detection -------------------------------------------
+ * A marginal baud rate does not refuse to work, it corrupts occasional bytes.
+ * The transport already carries a CRC-16, so corruption is detectable - these
+ * checks make sure it is actually counted rather than silently retried. */
+const { linkTest } = await import('../js/smp.js');
+
+// clean link
+const cleanPort = new FakePort((g, i2) => (g === 0 && i2 === 0) ? { d: 'echo' } : { rc: 0 });
+cleanPort._respond = function(req){
+  const payload = cborDecode(req.slice(8)) || {};
+  const seq = req[6], group = (req[4] << 8) | req[5], id = req[7];
+  const body = new Uint8Array(cborEncode({ d: payload.d }));
+  const h = new Uint8Array(8 + body.length);
+  h[0] = 3; h[2] = body.length >> 8; h[3] = body.length & 0xFF;
+  h[4] = group >> 8; h[5] = group & 0xFF; h[6] = seq; h[7] = id;
+  h.set(body, 8);
+  const frame = new Uint8Array(2 + h.length + 2);
+  const total = h.length + 2;
+  frame[0] = total >> 8; frame[1] = total & 0xFF;
+  frame.set(h, 2);
+  let c = crc16(h);
+  if (this.corrupt) c ^= 0xFFFF;                 // simulate a bit error
+  frame[frame.length - 2] = c >> 8; frame[frame.length - 1] = c & 0xFF;
+  const out = new TextEncoder().encode('\x06\x09' + b64encode(frame) + '\n');
+  setTimeout(() => this._pump && this._pump(out), 1);
+};
+const smp3 = new SmpPort(cleanPort);
+await smp3.open();
+const good = await linkTest(smp3, { rounds: 5, payload: 64 });
+check('clean link reports clean', good.clean && good.ok === 5, JSON.stringify({ ok: good.ok, crc: good.crcErrors }));
+check('clean link reports throughput', good.kbps > 0, String(good.kbps));
+
+// corrupted link
+cleanPort.corrupt = true;
+const bad = await linkTest(smp3, { rounds: 3, payload: 64 });
+check('corrupt link is not reported clean', !bad.clean, JSON.stringify(bad));
+check('CRC errors are counted', bad.crcErrors === 3, String(bad.crcErrors));
+check('corrupt link reports zero good rounds', bad.ok === 0, String(bad.ok));
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

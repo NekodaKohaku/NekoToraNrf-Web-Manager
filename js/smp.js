@@ -302,7 +302,26 @@ export async function isInRecovery(smp){
 
 /* Upload an MCUboot update image and reboot into it.
  * onProgress({off, size, speed}) is called per accepted chunk. */
-export async function uploadImage(smp, bytes, { chunkSize = 128, onProgress = null } = {}){
+/* Bytes of firmware per SMP request.
+ *
+ * Was 128, which is what the reference tool uses and which made a 309 KB image
+ * take around eighty seconds - slower than the same update over the air. The
+ * cost is not the bytes, it is the round trips: mcumgr's serial transport
+ * carries one request at a time and waits for the reply, so 128-byte chunks
+ * mean ~2500 stop-and-wait cycles and the link spends most of its life idle.
+ *
+ * 512 cuts that to ~620. The ceiling is the bootloader's receive buffer,
+ * CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE, which this firmware sets to 1024 (see
+ * gen_mcuboot_nekotora.py); a request is the payload plus an 8-byte SMP header
+ * and ~18 bytes of CBOR, so 512 leaves comfortable headroom while 960 would
+ * sit right on the edge.
+ *
+ * Anything larger than the bootloader's buffer is silently dropped, which
+ * looks like a dead link rather than a rejected request - hence the margin.
+ */
+export const DFU_CHUNK_SIZE = 512;
+
+export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onProgress = null } = {}){
   const t0 = Date.now();
   let off = 0, retries = 0;
 

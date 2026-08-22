@@ -114,5 +114,31 @@ check('upload transferred every byte', port.uploaded === fw.length, port.uploade
 check('progress reached 100%', Math.abs(lastPct - 1) < 1e-9, (lastPct * 100).toFixed(1) + '%');
 check('progress reported per chunk', calls === Math.ceil(fw.length / 128), calls + ' calls');
 
+/* --- chunk size ------------------------------------------------------
+ * The default drives how many stop-and-wait round trips a whole image costs,
+ * which is what dominates wired update time. It must also stay under the
+ * bootloader's CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE (1024) once the SMP header
+ * and CBOR wrapper are added, or requests are dropped with no error at all. */
+const { DFU_CHUNK_SIZE } = await import('../js/smp.js');
+check('chunk size raised from the 128 default', DFU_CHUNK_SIZE >= 512, String(DFU_CHUNK_SIZE));
+
+const probe = new FakePort((g, i2, payload, self) => {
+  if (g === 1 && i2 === 1){ self.biggest = Math.max(self.biggest || 0, payload.data.length);
+    self.uploaded = (payload.off || 0) + payload.data.length; return { rc: 0, off: self.uploaded }; }
+  return { rc: 0 };
+});
+const smp2 = new SmpPort(probe);
+await smp2.open();
+const img2 = new Uint8Array(4000);
+img2.set([0x3D, 0xB8, 0xF3, 0x96]);
+await uploadImage(smp2, img2);
+check('uploads use the full chunk', probe.biggest === DFU_CHUNK_SIZE, String(probe.biggest));
+check('whole image still transferred', probe.uploaded === img2.length, probe.uploaded + '/' + img2.length);
+
+/* Worst-case datagram must fit the bootloader buffer. */
+const worst = cborEncode({ image: 0, len: 400000, off: 400000, data: new Uint8Array(DFU_CHUNK_SIZE) });
+const datagram = 8 + worst.length + 2;
+check('request fits BOOT_SERIAL_MAX_RECEIVE_SIZE (1024)', datagram <= 1024, datagram + ' bytes');
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

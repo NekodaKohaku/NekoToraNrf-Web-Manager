@@ -538,22 +538,66 @@ async function scanTrackers(){
 
 /* ========================= connect: wired ============================ */
 
+/* The recovery UART's baud rate is fixed in the bootloader, and MCUboot lives
+ * in the boot partition - DFU cannot replace it, only SWD can. So a fleet ends
+ * up mixed: units flashed before the rate changed stay at the old one forever.
+ * Asking the customer which they have is not a fair question, so probe.
+ *
+ * Fastest first: a wrong rate produces garbage that never decodes into an SMP
+ * reply, so a failed probe costs one short echo timeout and nothing else. */
+const DFU_BAUDS = [921600, 460800, 230400, 115200];
+
 async function connectSerial(){
   if (!navigator.serial) return connFail(mkErr('errNoWebSerial'));
+  let port;
+  try { port = await navigator.serial.requestPort(); }
+  catch (e){ return isCancel(e) ? undefined : connFail(e); }
+
+  const choice = $('dfuBaud').value;
+  const list = choice === 'auto' ? DFU_BAUDS : [parseInt(choice, 10)];
+  state.busy = true; gate();
+
   try {
-    const port = await navigator.serial.requestPort();
-    const smp = new SmpPort(port, { baudRate: parseInt($('dfuBaud').value, 10) || 115200 });
-    await smp.open();
+    let opened = null;
+    for (const baud of list){
+      const smp = new SmpPort(port, { baudRate: baud });
+      try { await smp.open(); }
+      catch (e){ log(`serial: cannot open at ${baud} (${errText(e)})`, 'warn'); continue; }
+
+      if (list.length === 1){ opened = smp; break; }   // trust an explicit choice
+
+      $('connStatus').textContent = t('dfuProbing', { baud });
+      /* Only a device already sitting in recovery answers an echo, so a silent
+       * probe is not proof of the wrong rate - it just means we cannot tell
+       * yet. Keep the last one open and let "enter update mode" settle it. */
+      if (await isInRecovery(smp)){ opened = smp; log(`serial: recovery answered at ${baud}`); break; }
+      await smp.close();
+      opened = null;
+    }
+
+    if (!opened){
+      /* Nothing answered. Fall back to the rate this firmware ships with so
+       * the flow still works for a tracker that has not been put into
+       * recovery yet. */
+      const baud = choice === 'auto' ? 115200 : parseInt(choice, 10);
+      opened = new SmpPort(port, { baudRate: baud });
+      await opened.open();
+      log(`serial: no reply while probing, staying at ${baud}`, 'warn');
+    }
+
     state.port = port;
-    state.smp = smp;
-    log('serial port opened at ' + smp.baudRate);
+    state.smp = opened;
+    log('serial port opened at ' + opened.baudRate);
     /* A serial port says nothing about what is on the other end, so this
      * only picks a manifest - it is not a detection. */
     if (!state.device) await loadManifestFor(reg.devices()[0] || null);
-    /* It may already be sitting in recovery from a previous attempt. */
-    state.inRecovery = await isInRecovery(smp);
+    state.inRecovery = await isInRecovery(opened);
+  } catch (e){
+    if (!isCancel(e)) connFail(e);
+  } finally {
+    state.busy = false;
     refresh();
-  } catch (e){ if (!isCancel(e)) connFail(e); }
+  }
 }
 
 async function doEnterRecovery(){
@@ -697,7 +741,6 @@ async function runDfu(fw){
   if (!bytes) throw mkErr('errWrongFormat', { want: '.update.bin' });
 
   await uploadImage(state.smp, bytes, {
-    chunkSize: 128,
     onProgress: p => {
       setDetail(t('otaProgress', {
         done: kb(p.off), total: kb(p.size), speed: p.speed.toFixed(1),

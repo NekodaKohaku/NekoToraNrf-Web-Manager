@@ -393,19 +393,46 @@ export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onPr
 
 /* Probe link quality before committing to a long upload.
  *
- * Sends echo requests carrying a payload comparable to a real firmware chunk
- * and counts what comes back intact. A marginal baud rate does not refuse to
- * work - it drops the occasional byte, so the only honest test is volume.
+ * This tests reachability and integrity, not throughput. The distinction
+ * matters because the obvious design - echo a chunk-sized payload and see if
+ * it comes back - does not work here: MCUboot's serial recovery is a cut-down
+ * SMP implementation whose echo response buffer is far smaller than the 1024
+ * byte receive buffer used for image upload. A 256 byte echo is dropped by a
+ * perfectly healthy link, and reporting that as a fault sends the customer off
+ * to fix wiring that was never broken. It did exactly that at 115200, the one
+ * rate known to work.
  *
- * Cheap: a couple of seconds against an upload that runs for a minute, and it
- * fails in a way that costs nothing rather than halfway through writing flash.
+ * So the size is discovered rather than assumed: try progressively smaller
+ * payloads until one round-trips, then run the real test at that size. A link
+ * that cannot echo even a few bytes is genuinely broken; one that echoes small
+ * but not large has a bootloader buffer limit, which says nothing about the
+ * baud rate.
+ *
+ * The authoritative throughput and error figures come from uploadImage's own
+ * counters afterwards, because only the real transfer exercises the real path.
  */
-export async function linkTest(smp, { rounds = 20, payload = 256 } = {}){
-  const filler = 'A'.repeat(payload);
+export async function linkTest(smp, { rounds = 20, sizes = [128, 64, 32, 8] } = {}){
   const crc0 = smp.crcErrors, bad0 = smp.badLines;
+
+  /* Largest payload this bootloader will echo. */
+  let payload = 0;
+  for (const n of sizes){
+    const probe = 'A'.repeat(n);
+    try {
+      const r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: probe }, 1500);
+      if (r && r.payload && r.payload.d === probe){ payload = n; break; }
+    } catch (_) { /* try smaller */ }
+  }
+
+  if (!payload){
+    return { rounds: 0, ok: 0, failed: 0, payload: 0, unusable: true, clean: false,
+             crcErrors: smp.crcErrors - crc0, badLines: smp.badLines - bad0,
+             seconds: 0, kbps: 0, baudRate: smp.baudRate };
+  }
+
+  const filler = 'A'.repeat(payload);
   let ok = 0, failed = 0;
   const t0 = Date.now();
-
   for (let i = 0; i < rounds; i++){
     try {
       const r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: filler }, 1500);
@@ -415,11 +442,12 @@ export async function linkTest(smp, { rounds = 20, payload = 256 } = {}){
 
   const secs = (Date.now() - t0) / 1000;
   return {
-    rounds, ok, failed,
+    rounds, ok, failed, payload,
+    unusable: false,
     crcErrors: smp.crcErrors - crc0,
     badLines: smp.badLines - bad0,
     seconds: secs,
-    kbps: (ok * payload * 2) / 1024 / secs,   // echoed both ways
+    kbps: (ok * payload * 2) / 1024 / secs,
     baudRate: smp.baudRate,
     clean: failed === 0 && (smp.crcErrors - crc0) === 0 && (smp.badLines - bad0) === 0,
   };

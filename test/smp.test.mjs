@@ -141,43 +141,69 @@ const datagram = 8 + worst.length + 2;
 check('request fits BOOT_SERIAL_MAX_RECEIVE_SIZE (1024)', datagram <= 1024, datagram + ' bytes');
 
 /* --- link quality detection -------------------------------------------
- * A marginal baud rate does not refuse to work, it corrupts occasional bytes.
- * The transport already carries a CRC-16, so corruption is detectable - these
- * checks make sure it is actually counted rather than silently retried. */
+ * The first version of this test echoed a 256-byte payload and declared the
+ * link broken when it came back empty. On real hardware that fired at 115200 -
+ * the one rate known to work - because MCUboot's serial recovery echoes from a
+ * much smaller buffer than the one it uses for image upload. So the size has
+ * to be discovered, and a bootloader buffer limit must not be reported as a
+ * baud rate fault.
+ */
 const { linkTest } = await import('../js/smp.js');
 
-// clean link
-const cleanPort = new FakePort((g, i2) => (g === 0 && i2 === 0) ? { d: 'echo' } : { rc: 0 });
-cleanPort._respond = function(req){
-  const payload = cborDecode(req.slice(8)) || {};
-  const seq = req[6], group = (req[4] << 8) | req[5], id = req[7];
-  const body = new Uint8Array(cborEncode({ d: payload.d }));
-  const h = new Uint8Array(8 + body.length);
-  h[0] = 3; h[2] = body.length >> 8; h[3] = body.length & 0xFF;
-  h[4] = group >> 8; h[5] = group & 0xFF; h[6] = seq; h[7] = id;
-  h.set(body, 8);
-  const frame = new Uint8Array(2 + h.length + 2);
-  const total = h.length + 2;
-  frame[0] = total >> 8; frame[1] = total & 0xFF;
-  frame.set(h, 2);
-  let c = crc16(h);
-  if (this.corrupt) c ^= 0xFFFF;                 // simulate a bit error
-  frame[frame.length - 2] = c >> 8; frame[frame.length - 1] = c & 0xFF;
-  const out = new TextEncoder().encode('\x06\x09' + b64encode(frame) + '\n');
-  setTimeout(() => this._pump && this._pump(out), 1);
-};
-const smp3 = new SmpPort(cleanPort);
-await smp3.open();
-const good = await linkTest(smp3, { rounds: 5, payload: 64 });
-check('clean link reports clean', good.clean && good.ok === 5, JSON.stringify({ ok: good.ok, crc: good.crcErrors }));
-check('clean link reports throughput', good.kbps > 0, String(good.kbps));
+/* A port that echoes, but only up to `echoMax` bytes - like the real
+ * bootloader. Larger requests get no reply at all. */
+function echoPort({ echoMax = Infinity, corrupt = false } = {}){
+  const p = new FakePort(() => ({ rc: 0 }));
+  p._respond = function(req){
+    const payload = cborDecode(req.slice(8)) || {};
+    const seq = req[6], group = (req[4] << 8) | req[5], id = req[7];
+    if (group === 0 && id === 0 && (payload.d || '').length > echoMax) return;  // silently dropped
+    const body = new Uint8Array(cborEncode({ d: payload.d }));
+    const h = new Uint8Array(8 + body.length);
+    h[0] = 3; h[2] = body.length >> 8; h[3] = body.length & 0xFF;
+    h[4] = group >> 8; h[5] = group & 0xFF; h[6] = seq; h[7] = id;
+    h.set(body, 8);
+    const frame = new Uint8Array(2 + h.length + 2);
+    const total = h.length + 2;
+    frame[0] = total >> 8; frame[1] = total & 0xFF;
+    frame.set(h, 2);
+    let c = crc16(h);
+    if (corrupt) c ^= 0xFFFF;
+    frame[frame.length - 2] = c >> 8; frame[frame.length - 1] = c & 0xFF;
+    const out = new TextEncoder().encode('\x06\x09' + b64encode(frame) + '\n');
+    setTimeout(() => this._pump && this._pump(out), 1);
+  };
+  return p;
+}
 
-// corrupted link
-cleanPort.corrupt = true;
-const bad = await linkTest(smp3, { rounds: 3, payload: 64 });
-check('corrupt link is not reported clean', !bad.clean, JSON.stringify(bad));
-check('CRC errors are counted', bad.crcErrors === 3, String(bad.crcErrors));
-check('corrupt link reports zero good rounds', bad.ok === 0, String(bad.ok));
+// the regression: small echo buffer, healthy link
+const small = echoPort({ echoMax: 32 });
+const smpSmall = new SmpPort(small); await smpSmall.open();
+const rSmall = await linkTest(smpSmall, { rounds: 5 });
+check('small echo buffer is NOT called a link fault', rSmall.clean,
+      JSON.stringify({ ok: rSmall.ok, payload: rSmall.payload, clean: rSmall.clean }));
+check('payload size was discovered, not assumed', rSmall.payload === 32, String(rSmall.payload));
+
+// generous buffer: uses the largest size
+const roomy = echoPort({ echoMax: 1024 });
+const smpBig = new SmpPort(roomy); await smpBig.open();
+const rBig = await linkTest(smpBig, { rounds: 5 });
+check('a generous buffer uses the largest payload', rBig.payload === 128, String(rBig.payload));
+check('generous buffer reports clean', rBig.clean);
+
+// genuinely corrupt link
+const rot = echoPort({ echoMax: 1024, corrupt: true });
+const smpRot = new SmpPort(rot); await smpRot.open();
+const rRot = await linkTest(smpRot, { rounds: 3 });
+check('corruption at every size is reported unusable', rRot.unusable && !rRot.clean, JSON.stringify(rRot));
+check('CRC errors counted while probing', rRot.crcErrors > 0, String(rRot.crcErrors));
+
+// completely silent link
+const dead = new FakePort(() => ({ rc: 0 }));
+dead._respond = function(){ /* nothing ever comes back */ };
+const smpDead = new SmpPort(dead); await smpDead.open();
+const rDead = await linkTest(smpDead, { rounds: 2 });
+check('a silent link is unusable', rDead.unusable && rDead.payload === 0, JSON.stringify(rDead));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

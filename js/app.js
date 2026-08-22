@@ -545,7 +545,11 @@ async function scanTrackers(){
  *
  * Fastest first: a wrong rate produces garbage that never decodes into an SMP
  * reply, so a failed probe costs one short echo timeout and nothing else. */
-const DFU_BAUDS = [921600, 460800, 230400, 115200];
+/* 1000000 first: it is the highest the CH32X035 bridge accepts (taskSER.c
+ * rejects anything above 1000000) and it divides exactly on both ends - 48 MHz
+ * / 48 on the CH32, and an exact register value on the nRF - whereas 921600
+ * needs a fractional divisor on both. Same speed class, less baud error. */
+const DFU_BAUDS = [1000000, 921600, 460800, 230400, 115200];
 
 async function connectSerial(){
   if (!navigator.serial) return connFail(mkErr('errNoWebSerial'));
@@ -615,13 +619,26 @@ async function doEnterRecovery(){
      * or the USB-serial adapter does not fail cleanly - it corrupts occasional
      * bytes - so the test sends real volume and counts what survives. */
     const r = await linkTest(state.smp);
-    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok, ${r.crcErrors} CRC errors, ` +
-        `${r.kbps.toFixed(1)} KB/s`, r.clean ? undefined : 'warn');
+    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok at ${r.payload} B, ` +
+        `${r.crcErrors} CRC errors`, r.clean ? undefined : 'warn');
+
     $('dfuLink').classList.remove('hidden');
-    $('dfuLink').textContent = r.clean
-      ? t('dfuLinkOk', { baud: r.baudRate, kbps: r.kbps.toFixed(1) })
-      : t('dfuLinkBad', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds });
-    $('dfuLink').style.color = r.clean ? 'var(--ok)' : 'var(--warn)';
+    if (r.unusable){
+      /* Nothing echoed at any size. Recovery answered a moment ago, so this is
+       * a real link fault rather than a bootloader quirk. */
+      $('dfuLink').textContent = t('dfuLinkDead', { baud: r.baudRate });
+      $('dfuLink').style.color = 'var(--err)';
+    } else if (r.clean){
+      $('dfuLink').textContent = t('dfuLinkOk', { baud: r.baudRate, n: r.rounds });
+      $('dfuLink').style.color = 'var(--ok)';
+    } else {
+      /* Only suggest slowing down when there is somewhere slower to go. */
+      const slower = DFU_BAUDS.filter(b => b < r.baudRate);
+      $('dfuLink').textContent = slower.length
+        ? t('dfuLinkBad', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds, next: slower[0] })
+        : t('dfuLinkBadLowest', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds });
+      $('dfuLink').style.color = 'var(--warn)';
+    }
   } finally {
     $('btnEnterDfu').disabled = false;
     state.busy = false;

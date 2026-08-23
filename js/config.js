@@ -64,3 +64,21 @@ export const METHODS = ['ota', 'dfu', 'swd'];
  * customer, a predictable minute beats an unpredictable failure.
  */
 export const OTA_SEQUENTIAL = true;
+
+/* Wired DFU runs at one speed, everywhere, always.
+ *
+ * There is no negotiation in UART and no way to ask a tracker what it is set
+ * to, so an updater can only guess-and-check - open, send, wait, close, repeat.
+ * That was tried. It is slow, it fails in ways that are impossible to explain
+ * to a customer, and it turns one clear failure ("wrong speed") into a vague
+ * one ("nothing responded"). The firmware sets this rate in three places that
+ * are all generated from the same build config (application console, MCUboot
+ * recovery console, and this), so a NekoTora tracker is 1000000 by definition.
+ * If a unit ever answers at something else, it has the wrong firmware, and
+ * that is worth failing loudly over rather than silently working around.
+ *
+ * 1000000 and not 921600: it is the ceiling the CH32X035 bridge accepts, and it
+ * divides exactly on both ends - 48 MHz / 48 on the CH32, an exact register
+ * value on the nRF - where 921600 needs a fractional divisor on both.
+ */
+export const DFU_BAUD = 1000000;

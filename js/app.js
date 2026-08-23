@@ -10,7 +10,7 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG } from './config.js';
+import { CONFIG, DFU_BAUD } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
@@ -18,7 +18,7 @@ import { parseUpdateBin, looksLikeUpdateBin } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
 import { Dongle, OtaClient } from './ota.js';
-import { SmpPort, enterRecovery, uploadImage, linkTest } from './smp.js';
+import { SmpPort, enterRecovery, uploadImage } from './smp.js';
 import * as reg from './registry.js';
 
 const $ = id => document.getElementById(id);
@@ -539,19 +539,6 @@ async function scanTrackers(){
 
 /* ========================= connect: wired ============================ */
 
-/* The recovery UART's baud rate is fixed in the bootloader, and MCUboot lives
- * in the boot partition - DFU cannot replace it, only SWD can. So a fleet ends
- * up mixed: units flashed before the rate changed stay at the old one forever.
- * Asking the customer which they have is not a fair question, so probe.
- *
- * Fastest first: a wrong rate produces garbage that never decodes into an SMP
- * reply, so a failed probe costs one short echo timeout and nothing else. */
-/* 1000000 first: it is the highest the CH32X035 bridge accepts (taskSER.c
- * rejects anything above 1000000) and it divides exactly on both ends - 48 MHz
- * / 48 on the CH32, and an exact register value on the nRF - whereas 921600
- * needs a fractional divisor on both. Same speed class, less baud error. */
-const DFU_BAUDS = [1000000, 921600, 460800, 230400, 115200];
-
 async function connectSerial(){
   if (!navigator.serial) return connFail(mkErr('errNoWebSerial'));
   try {
@@ -559,10 +546,6 @@ async function connectSerial(){
     state.port = port;
     state.smp = null;
     state.inRecovery = false;
-    /* No baud probing here. Nothing can be learned yet: a tracker running its
-     * normal firmware does not speak SMP, so silence at every rate would prove
-     * nothing. The rate is settled by "enter update mode", which can send the
-     * dfu command and watch for recovery across the reboot. */
     log('serial port selected');
     if (!state.device) await loadManifestFor(reg.devices()[0] || null);
     refresh();
@@ -576,39 +559,12 @@ async function doEnterRecovery(){
   try {
     if (state.smp){ try { await state.smp.close(); } catch (_) {} state.smp = null; }
 
-    const choice = $('dfuBaud').value;
-    const bauds = choice === 'auto' ? DFU_BAUDS : [parseInt(choice, 10)];
-    const got = await enterRecovery(state.port, bauds, {
-      onProbe: baud => { $('connStatus').textContent = t('dfuProbing', { baud }); },
-    });
+    const smp = await enterRecovery(state.port, { baudRate: DFU_BAUD });
+    if (!smp){ state.inRecovery = false; connFail(mkErr('errDfuNoResponse')); return; }
 
-    if (!got){ state.inRecovery = false; connFail(mkErr('errDfuNoResponse')); return; }
-    state.smp = got.smp;
+    state.smp = smp;
     state.inRecovery = true;
     $('connErr').classList.add('hidden');
-
-    /* Measure the link before trusting it with a minute-long upload. A rate
-     * too fast for the wiring does not fail cleanly - it corrupts occasional
-     * bytes - so the test sends volume and counts what survives. */
-    const r = await linkTest(state.smp);
-    log(`link test @${r.baudRate}: ${r.ok}/${r.rounds} ok via ` +
-        `${r.echo ? r.payload + ' B echo' : 'image-list (bootloader has no echo)'}, ` +
-        `${r.crcErrors} CRC errors, ${r.badLines} bad lines`, r.clean ? undefined : 'warn');
-
-    $('dfuLink').classList.remove('hidden');
-    if (r.unusable){
-      $('dfuLink').textContent = t('dfuLinkDead', { baud: r.baudRate });
-      $('dfuLink').style.color = 'var(--err)';
-    } else if (r.clean){
-      $('dfuLink').textContent = t('dfuLinkOk', { baud: r.baudRate, n: r.rounds });
-      $('dfuLink').style.color = 'var(--ok)';
-    } else {
-      const slower = DFU_BAUDS.filter(b => b < r.baudRate);
-      $('dfuLink').textContent = slower.length
-        ? t('dfuLinkBad', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds, next: slower[0] })
-        : t('dfuLinkBadLowest', { baud: r.baudRate, bad: r.failed + r.crcErrors, n: r.rounds });
-      $('dfuLink').style.color = 'var(--warn)';
-    }
   } finally {
     $('btnEnterDfu').disabled = false;
     state.busy = false;

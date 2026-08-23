@@ -20,9 +20,9 @@ import { mkErr, log, sleep } from './util.js';
 
 /* SMP groups/ids used here. Group 0 is OS management (echo, reset), group 1 is
  * image management (upload). */
-const OP_READ = 0, OP_WRITE = 2;
+const OP_WRITE = 2;
 const GRP_OS = 0, GRP_IMAGE = 1;
-const ID_ECHO = 0, ID_RESET = 5, ID_UPLOAD = 1, ID_STATE = 0;
+const ID_ECHO = 0, ID_RESET = 5, ID_UPLOAD = 1;
 
 export function crc16(data) {
   let crc = 0;
@@ -281,85 +281,50 @@ export class SmpPort {
 
 /* ===================== high-level DFU ================================ */
 
-/* Get the tracker into serial recovery, finding the right baud rate on the way.
+/* Get the tracker into serial recovery.
  *
- * Two things make this more than "send dfu and wait":
+ * The rate is fixed (see DFU_BAUD in config.js), so this does not search. It
+ * opens once and keeps the port open across the reboot - the CH32X035 bridge
+ * stays enumerated over USB while the nRF restarts, so there is nothing to
+ * reconnect to.
  *
- * The rate is not knowable up front. It is fixed in the firmware, MCUboot
- * cannot update itself, and units flashed before the rate changed keep the old
- * one forever - so a fleet is mixed and asking the customer is not a fair
- * question.
+ * The one thing it must handle is that `dfu` is a command of the running
+ * *application*, while every reply afterwards comes from *MCUboot recovery*.
+ * A healthy running tracker does not speak SMP at all, so silence before the
+ * command means nothing; silence after it means the tracker did not reboot.
  *
- * And the probe has to span a reboot. `dfu` is a command of the running
- * *application*, while the reply afterwards comes from *MCUboot recovery*.
- * Probing for an SMP echo before sending anything therefore finds nothing: a
- * healthy running tracker does not speak SMP at all. Silence proves nothing
- * about the rate, so each candidate has to be given the whole cycle - open,
- * send dfu, wait for recovery - before being ruled out.
- *
- * Returns { smp, baudRate } on success, or null. The caller owns the port; any
- * SmpPort opened here and not returned is closed again.
+ * Returns an open SmpPort, or null. On failure the port is closed again.
  */
-export async function enterRecovery(port, bauds, { perBaudMs = 6000, onProbe = null } = {}){
-  /* Open at one rate, do something, close. Web Serial cannot change the rate
-   * of an open port, so every rate change is a full close/reopen cycle. */
-  const at = async (baudRate, fn) => {
-    let smp = null;
-    try { smp = new SmpPort(port, { baudRate }); await smp.open(); }
-    catch (e){
-      log(`serial: cannot open at ${baudRate} (${e && e.message})`, 'warn');
-      if (smp){ try { await smp.close(); } catch (_) {} }
-      return null;
-    }
-    if (onProbe) onProbe(baudRate);
-    let keep = false;
-    try { keep = await fn(smp); } catch (_) { keep = false; }
-    if (keep) return smp;
-    try { await smp.close(); } catch (_) {}
+export async function enterRecovery(port, { baudRate, timeoutMs = 8000 } = {}){
+  let smp = null;
+  try { smp = new SmpPort(port, { baudRate }); await smp.open(); }
+  catch (e){
+    log(`serial: cannot open at ${baudRate} (${e && e.message})`, 'warn');
+    if (smp){ try { await smp.close(); } catch (_) {} }
     return null;
-  };
-
-  /* Phase 1 - is it already there? A tracker left in recovery from a previous
-   * attempt is the common case when something went wrong, and it needs no
-   * reboot, so this is worth one cheap sweep before anything is sent. */
-  for (const baudRate of bauds){
-    const smp = await at(baudRate, s => isInRecovery(s));
-    if (smp){ log(`serial: recovery already active at ${baudRate}`); return { smp, baudRate }; }
   }
 
-  /* Phase 2 - ask the application to reboot into recovery.
-   *
-   * Only one of these rates is the application console; at the others `dfu` is
-   * noise the console will not recognise, which is harmless. We do not know
-   * which one worked, and we cannot tell from here, because the reply comes
-   * from a different program at a possibly different rate. */
-  for (const baudRate of bauds){
-    await at(baudRate, async s => {
-      try { await s.writeRaw(new TextEncoder().encode('dfu\n')); } catch (_) {}
-      await sleep(150);
-      return false;
-    });
+  /* Already there? A tracker left in recovery by a previous attempt needs no
+   * reboot, and rebooting it would only take it out again. */
+  if (await isInRecovery(smp)){
+    log(`serial: recovery already active at ${baudRate}`);
+    return smp;
   }
 
-  /* Phase 3 - find recovery again, at any rate.
-   *
-   * This sweep is the whole reason the function is shaped this way. The `dfu`
-   * command goes to the application, whose console rate is set by the app
-   * build, while the answer comes from MCUboot, whose rate is set by the
-   * bootloader build. Those two are supposed to match, but a tracker flashed
-   * before the rate changed - or one whose bootloader was never re-flashed,
-   * which DFU cannot do - has an application on one rate and a bootloader on
-   * another. Waiting for a reply on the rate we sent `dfu` on would then time
-   * out on a device that is sitting in recovery, perfectly reachable, one rate
-   * away. So after sending, we stop assuming and just look everywhere. */
-  const deadline = Date.now() + perBaudMs;
+  try { await smp.writeRaw(new TextEncoder().encode('dfu\n')); }
+  catch (e){ log(`serial: could not send dfu (${e && e.message})`, 'warn'); }
+
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline){
-    for (const baudRate of bauds){
-      const smp = await at(baudRate, s => isInRecovery(s, 400));
-      if (smp){ log(`serial: entered recovery at ${baudRate}`); return { smp, baudRate }; }
+    if (await isInRecovery(smp, 400)){
+      log(`serial: entered recovery at ${baudRate}`);
+      return smp;
     }
     await sleep(120);
   }
+
+  log('serial: no SMP response after dfu', 'warn');
+  try { await smp.close(); } catch (_) {}
   return null;
 }
 
@@ -452,87 +417,3 @@ export async function uploadImage(smp, bytes, { chunkSize = DFU_CHUNK_SIZE, onPr
   return stats;
 }
 
-/* Probe link quality before committing to a long upload.
- *
- * This tests reachability and integrity, not throughput.
- *
- * The obvious design - echo a payload and check it comes back - is wrong here,
- * twice over. First, MCUboot's serial recovery is a cut-down SMP stack, and
- * `CONFIG_BOOT_MGMT_ECHO` is off by default, so it has no echo command at all.
- * It still *answers*: unknown commands come back as a well-formed SMP response
- * carrying rc = ENOTSUP. So the link is provably alive and the transport is
- * provably intact, while the returned payload has no `d` field. Reading that as
- * "nothing came back" is how a working 1 Mbaud link got reported as completely
- * dead wiring. Second, even where echo exists, its response buffer is far
- * smaller than the 1024-byte receive buffer used for uploads, so a large echo
- * is dropped by a healthy link.
- *
- * So: prefer echo when the bootloader has it, at a discovered size, because it
- * exercises both directions. Otherwise fall back to the image-list command,
- * which every MCUboot serial recovery implements and which returns a real
- * payload including a 32-byte hash - enough to prove the receive path carries
- * volume intact at this rate. Only true silence counts as a dead link.
- *
- * The authoritative throughput and error figures come from uploadImage's own
- * counters afterwards, because only the real transfer exercises the real path.
- */
-
-/* Did this response actually carry the echoed text back? */
-function echoed(r, probe){ return !!(r && r.payload && r.payload.d === probe); }
-
-/* An SMP response at all - including an error response. Anything well-formed
- * enough to decode and match our sequence number proves the link. */
-function answered(r){ return !!(r && typeof r.op === 'number'); }
-
-export async function linkTest(smp, { rounds = 20, sizes = [128, 64, 32, 8] } = {}){
-  const crc0 = smp.crcErrors, bad0 = smp.badLines;
-  const base = { crcErrors: 0, badLines: 0, baudRate: smp.baudRate };
-  const tally = () => ({ crcErrors: smp.crcErrors - crc0, badLines: smp.badLines - bad0 });
-
-  /* Largest payload this bootloader will echo, if it echoes at all. */
-  let payload = 0, sawAnswer = false;
-  for (const n of sizes){
-    const probe = 'A'.repeat(n);
-    let r = null;
-    try { r = await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: probe }, 1500); } catch (_) {}
-    if (answered(r)) sawAnswer = true;
-    if (echoed(r, probe)){ payload = n; break; }
-    /* A clean ENOTSUP means no echo command exists; smaller will not help. */
-    if (answered(r) && r.payload && r.payload.rc !== undefined) break;
-  }
-
-  const probeFn = payload
-    ? (() => { const filler = 'A'.repeat(payload);
-               return async () => echoed(await smp.request(OP_WRITE, GRP_OS, ID_ECHO, { d: filler }, 1500), filler); })()
-    : async () => answered(await smp.request(OP_READ, GRP_IMAGE, ID_STATE, {}, 1500));
-
-  if (!payload){
-    /* Confirm the fallback works before declaring anything. */
-    let alive = sawAnswer;
-    if (!alive){ try { alive = await probeFn(); } catch (_) { alive = false; } }
-    if (!alive){
-      return { ...base, ...tally(), rounds: 0, ok: 0, failed: 0, payload: 0,
-               echo: false, unusable: true, clean: false, seconds: 0, kbps: 0 };
-    }
-  }
-
-  let ok = 0, failed = 0;
-  const t0 = Date.now();
-  for (let i = 0; i < rounds; i++){
-    try { if (await probeFn()) ok++; else failed++; }
-    catch (_) { failed++; }
-  }
-
-  const secs = (Date.now() - t0) / 1000;
-  const t = tally();
-  return {
-    ...base, ...t,
-    rounds, ok, failed,
-    payload,
-    echo: payload > 0,
-    unusable: false,
-    seconds: secs,
-    kbps: payload ? (ok * payload * 2) / 1024 / secs : 0,
-    clean: failed === 0 && t.crcErrors === 0 && t.badLines === 0,
-  };
-}

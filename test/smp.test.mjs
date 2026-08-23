@@ -140,70 +140,56 @@ const worst = cborEncode({ image: 0, len: 400000, off: 400000, data: new Uint8Ar
 const datagram = 8 + worst.length + 2;
 check('request fits BOOT_SERIAL_MAX_RECEIVE_SIZE (1024)', datagram <= 1024, datagram + ' bytes');
 
-/* --- link quality detection -------------------------------------------
- * The first version of this test echoed a 256-byte payload and declared the
- * link broken when it came back empty. On real hardware that fired at 115200 -
- * the one rate known to work - because MCUboot's serial recovery echoes from a
- * much smaller buffer than the one it uses for image upload. So the size has
- * to be discovered, and a bootloader buffer limit must not be reported as a
- * baud rate fault.
+/* --- entering recovery ------------------------------------------------
+ * The rate is fixed now, so there is nothing to search for. What is left is
+ * the one thing that still has to be right: `dfu` is a command of the running
+ * application, but every reply comes from MCUboot afterwards, so the port must
+ * be watched across the reboot rather than answered from immediately.
+ *
+ * Two shapes matter. A tracker already sitting in recovery must not be sent
+ * `dfu` - that command means nothing to the bootloader and rebooting would
+ * only take it back out. A tracker running normally must be told to reboot and
+ * then waited for, because it says nothing at all until it does.
  */
-const { linkTest } = await import('../js/smp.js');
+const { enterRecovery } = await import('../js/smp.js');
 
-/* A port that echoes, but only up to `echoMax` bytes - like the real
- * bootloader. Larger requests get no reply at all. */
-function echoPort({ echoMax = Infinity, corrupt = false } = {}){
-  const p = new FakePort(() => ({ rc: 0 }));
-  p._respond = function(req){
-    const payload = cborDecode(req.slice(8)) || {};
-    const seq = req[6], group = (req[4] << 8) | req[5], id = req[7];
-    if (group === 0 && id === 0 && (payload.d || '').length > echoMax) return;  // silently dropped
-    const body = new Uint8Array(cborEncode({ d: payload.d }));
-    const h = new Uint8Array(8 + body.length);
-    h[0] = 3; h[2] = body.length >> 8; h[3] = body.length & 0xFF;
-    h[4] = group >> 8; h[5] = group & 0xFF; h[6] = seq; h[7] = id;
-    h.set(body, 8);
-    const frame = new Uint8Array(2 + h.length + 2);
-    const total = h.length + 2;
-    frame[0] = total >> 8; frame[1] = total & 0xFF;
-    frame.set(h, 2);
-    let c = crc16(h);
-    if (corrupt) c ^= 0xFFFF;
-    frame[frame.length - 2] = c >> 8; frame[frame.length - 1] = c & 0xFF;
-    const out = new TextEncoder().encode('\x06\x09' + b64encode(frame) + '\n');
-    setTimeout(() => this._pump && this._pump(out), 1);
+/* A tracker with two personalities. Running normally it ignores SMP entirely,
+ * exactly like real application firmware, and only reacts to the text command
+ * on its console. */
+function trackerPort({ inRecovery = false, rebootMs = 300, deaf = false } = {}){
+  const p = new FakePort(() => ({ r: 'hi' }));
+  p.state = { inRecovery, dfuCount: 0 };
+  const respond = p._respond.bind(p);
+  p._respond = req => { if (p.state.inRecovery) respond(req); };
+  const onWrite = p._onWrite.bind(p);
+  p._onWrite = bytes => {
+    const txt = new TextDecoder().decode(bytes);
+    if (txt.includes('dfu')){
+      p.state.dfuCount++;
+      if (!deaf) setTimeout(() => { p.state.inRecovery = true; }, rebootMs);
+      return;
+    }
+    onWrite(bytes);
   };
   return p;
 }
 
-// the regression: small echo buffer, healthy link
-const small = echoPort({ echoMax: 32 });
-const smpSmall = new SmpPort(small); await smpSmall.open();
-const rSmall = await linkTest(smpSmall, { rounds: 5 });
-check('small echo buffer is NOT called a link fault', rSmall.clean,
-      JSON.stringify({ ok: rSmall.ok, payload: rSmall.payload, clean: rSmall.clean }));
-check('payload size was discovered, not assumed', rSmall.payload === 32, String(rSmall.payload));
+const running = trackerPort();
+const smpRun = await enterRecovery(running, { baudRate: 1000000, timeoutMs: 4000 });
+check('a running tracker is rebooted into recovery', !!smpRun);
+check('dfu was sent exactly once', running.state.dfuCount === 1, String(running.state.dfuCount));
+if (smpRun) await smpRun.close();
 
-// generous buffer: uses the largest size
-const roomy = echoPort({ echoMax: 1024 });
-const smpBig = new SmpPort(roomy); await smpBig.open();
-const rBig = await linkTest(smpBig, { rounds: 5 });
-check('a generous buffer uses the largest payload', rBig.payload === 128, String(rBig.payload));
-check('generous buffer reports clean', rBig.clean);
+const already = trackerPort({ inRecovery: true });
+const smpAlready = await enterRecovery(already, { baudRate: 1000000, timeoutMs: 4000 });
+check('a tracker already in recovery is used as-is', !!smpAlready);
+check('no dfu sent to a tracker already in recovery', already.state.dfuCount === 0,
+      String(already.state.dfuCount));
+if (smpAlready) await smpAlready.close();
 
-// genuinely corrupt link
-const rot = echoPort({ echoMax: 1024, corrupt: true });
-const smpRot = new SmpPort(rot); await smpRot.open();
-const rRot = await linkTest(smpRot, { rounds: 3 });
-check('corruption at every size is reported unusable', rRot.unusable && !rRot.clean, JSON.stringify(rRot));
-check('CRC errors counted while probing', rRot.crcErrors > 0, String(rRot.crcErrors));
-
-// completely silent link
-const dead = new FakePort(() => ({ rc: 0 }));
-dead._respond = function(){ /* nothing ever comes back */ };
-const smpDead = new SmpPort(dead); await smpDead.open();
-const rDead = await linkTest(smpDead, { rounds: 2 });
-check('a silent link is unusable', rDead.unusable && rDead.payload === 0, JSON.stringify(rDead));
+const deafPort = trackerPort({ deaf: true });
+const smpDeaf = await enterRecovery(deafPort, { baudRate: 1000000, timeoutMs: 600 });
+check('a tracker that never reboots fails instead of hanging', smpDeaf === null);
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

@@ -1,9 +1,9 @@
 {
   "_comment": "由 CI 覆蓋此檔。version 顯示給使用者;versionCode 為 u32 版本碼(0x00MMmmpp,例如 1.2.3 = 66051 = 0x010203),與裝置 versionAddr 的值比對。三種更新方式需要不同檔案:hex = 完整映像(含 MCUboot),SWD 用;bin = MCUboot 簽章更新映像(.update.bin),無線 OTA 與有線 DFU 用。boardTarget 必須與韌體回報的 CONFIG_BOARD_TARGET 完全相同,追蹤器會在 OTA BEGIN 時比對,不符會回 BOARD_MISMATCH。",
-  "version": "1.0.2",
-  "versionCode": 65538,
+  "version": "1.0.3",
+  "versionCode": 65539,
   "boardTarget": "promicro_uf2/nrf52840/spi",
-  "hex": "nekotora-1.0.2.hex",
-  "bin": "nekotora-1.0.2.update.bin",
-  "date": "2026-08-22"
+  "hex": "nekotora-1.0.3.hex",
+  "bin": "nekotora-1.0.3.update.bin",
+  "date": "2026-08-23"
 }

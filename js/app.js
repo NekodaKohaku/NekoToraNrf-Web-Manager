@@ -69,6 +69,7 @@ function makePhases(verify){
     ? { connect: [0, .08], erase: [.08, .35], program: [.35, .8], verify: [.8, .97], reset: [.97, 1] }
     : { connect: [0, .08], erase: [.08, .4],  program: [.4, .95], verify: [.95, .95], reset: [.95, 1] };
 }
+function setPhases(map){ PH = map; }
 function setBar(frac){
   const p = Math.round(Math.max(0, Math.min(1, frac)) * 100);
   $('barFill').style.width = p + '%';
@@ -691,7 +692,20 @@ async function runOta(fw){
 }
 
 async function runDfu(fw){
-  makePhases(false);
+  /* Wired DFU is one long phase, not five.
+   *
+   * The SWD map above reserves the first 40% for connecting and erasing,
+   * because over SWD those are real, slow, separate steps. Over serial they are
+   * not: MCUboot is already sitting in recovery when the transfer starts, and
+   * it erases slot 1 as the writes cross into each page rather than up front.
+   * Reusing the SWD map meant the bar snapped straight to 40% on the first
+   * chunk and then spent the entire actual transfer creeping from 40 to 95 -
+   * which reads as "it rushed, then stalled" when nothing stalled at all.
+   *
+   * The small head start is the one honest pause: the first chunk carries the
+   * image size and MCUboot may do preparatory erase work before acknowledging.
+   */
+  setPhases({ erase: [0, .04], program: [.04, .97], reset: [.97, 1] });
   setStage('dfuStageUpload');
   const bytes = fw.kind === 'bin' ? fw.data : null;
   if (!bytes) throw mkErr('errWrongFormat', { want: '.update.bin' });

@@ -26,6 +26,7 @@ export const DEFAULT_DEVICES = {
       name: { zh: 'NekoTora 追蹤器', en: 'NekoTora Tracker', ja: 'NekoTora トラッカー' },
       chip: 'nrf52840',
       manifest: 'firmware/nekotora/latest.json',
+      dongleManifest: 'firmware/dongle/latest.json',
       usbFilters: [{ vendorId: 0x0D28, productId: 0x0204 }],
       dongleFilters: [{ vendorId: 0x1209, productId: 0x7690 }],
     },

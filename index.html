@@ -91,6 +91,10 @@ main{max-width:820px;margin:0 auto;padding:8px 20px 48px}
    fanned out, so the shared bar above shows how much has been sent while these
    show how far each tracker has actually consumed - which is where they differ
    when one falls behind or drops out. */
+details.rescue{margin-top:14px;font-size:13px;color:var(--muted)}
+details.rescue>summary{cursor:pointer;user-select:none}
+details.rescue ol{margin:8px 0 0;padding-left:20px;line-height:1.7}
+.trk .tName.wide{min-width:9em}
 .trkProgress{margin-top:14px;display:flex;flex-direction:column;gap:9px}
 .tp{display:flex;align-items:center;gap:10px;font-size:13px}
 .tp .tpName{flex:none;min-width:6.5em;font-weight:600}
@@ -108,7 +112,7 @@ main{max-width:820px;margin:0 auto;padding:8px 20px 48px}
 .result.ok .mark{color:var(--ok)}
 .result.bad .mark{color:var(--err)}
 .result h3{margin:6px 0 4px;font-size:20px}
-.result p{margin:2px 0 14px;color:var(--muted);font-size:14px}
+.result p{margin:2px 0 14px;color:var(--muted);font-size:14px;white-space:pre-line}
 .result p.errDetail{color:var(--err);font-size:13px;word-break:break-all;white-space:pre-line}
 details.adv{margin:18px 4px}
 details.adv>summary{cursor:pointer;color:var(--muted);font-size:14px;user-select:none}
@@ -159,6 +163,7 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
       </div>
       <div id="otaPick" class="hidden">
         <div class="stepHead" style="margin-top:16px"><h2 data-i18n="otaStepPick" style="font-size:15px"></h2></div>
+        <div class="trackers" id="dongleList" style="margin-bottom:10px"></div>
         <div class="trackers" id="trackerList"></div>
         <div class="row">
           <button id="btnSelectAll" class="linklike" data-i18n="otaSelectAll"></button>
@@ -166,6 +171,19 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
         </div>
       </div>
       <p id="otaNote" class="desc hidden"></p>
+      <!-- The one path that works when the dongle itself will not: its UF2
+           bootloader never changes, so a dongle whose application is broken
+           still comes up as a USB drive. Shown whether or not a dongle is
+           connected - a dongle that needs this cannot be connected. -->
+      <details class="rescue hidden" id="dongleRescue">
+        <summary data-i18n="rescueTitle"></summary>
+        <ol>
+          <li><span data-i18n="rescueStep1"></span> <a id="rescueLink" href="#" download></a></li>
+          <li><span data-i18n="rescueStep2"></span>
+              <button id="btnRescue" class="linklike hidden" data-i18n="rescueEnter"></button></li>
+          <li data-i18n="rescueStep3"></li>
+        </ol>
+      </details>
     </div>
 
     <!-- wired -->
@@ -192,7 +210,7 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
   <!-- Step 3: firmware -->
   <section class="card disabled" id="card3">
     <div class="stepHead"><span class="stepNum">3</span><h2 data-i18n="fwAutoTitle"></h2><span id="fwStatus" class="badge"></span></div>
-    <p class="desc" id="fwLine"></p>
+    <p class="desc" id="fwLine" style="white-space:pre-line"></p>
     <div class="fileInfo hidden" id="fileInfo">
       <div class="fname" id="fileName"></div>
       <div class="ranges" id="fileRanges"></div>

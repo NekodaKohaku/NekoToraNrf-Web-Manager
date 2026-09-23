@@ -32,6 +32,16 @@ export const HID = {
   ABORT:      0xF7,
 };
 
+/* Target id meaning "the dongle itself" rather than a tracker behind it
+ * (RECEIVER_OTA_ID in the receiver's src/receiver_ota.h). Same report types,
+ * same packet layouts; the dongle just keeps these instead of relaying them. */
+export const DONGLE_ID = 0xFE;
+
+/* Dongle-local command envelope (src/rcv_hid_cmd.h). Only the one command the
+ * page needs: reboot into the UF2 bootloader, the drag-and-drop recovery path. */
+const RCV_HID_TYPE_CMD = 254;
+const RCV_HID_OP_DFU   = 217;
+
 /* ---- OTA status codes ---- */
 export const ST = {
   IDLE: 0x00, READY: 0x01, RECEIVING: 0x02,
@@ -182,6 +192,14 @@ export class Dongle {
     /* Bytes 61-62: page-aligned flash base >> 12. Zero for MCUboot images,
      * which the tracker places itself. */
     if (flashBase > 0) dv.setUint16(61, flashBase >>> 12, false);
+    return this.send(p);
+  }
+
+  /* Reboot the dongle into its UF2 bootloader (args[0] = 0: UF2, not OTA DFU).
+   * It comes back as a USB drive; the .uf2 dragged onto it is the recovery. */
+  enterUf2(){
+    const p = new Uint8Array(REPORT_SIZE);
+    p[0] = RCV_HID_TYPE_CMD; p[1] = 0x55; p[2] = RCV_HID_OP_DFU; p[3] = 0; p[4] = 0;
     return this.send(p);
   }
 
@@ -549,5 +567,115 @@ export class OtaClient {
     active = ok.slice();
     onEvent({ stage: 'done', per: phaseRows('complete') });
     return { ok, failed };
+  }
+
+  /* Update the dongle itself (receiver self-OTA, target DONGLE_ID).
+   *
+   * Different enough from a tracker update to get its own sequence rather than
+   * flags on update():
+   *
+   *  - No radio and no ring buffer. DATA goes straight into the dongle's page
+   *    buffer, so there is no window to manage: sendReport() resolving is the
+   *    flow control, and packets are sent strictly in order because the dongle
+   *    treats any gap as fatal (SEQ_ERROR) rather than waiting for a replay.
+   *    A SEQ_ERROR therefore restarts the whole transfer once from BEGIN.
+   *  - STATUS is throttled to one per 20 ms while receiving, so the final
+   *    cursor may never be reported. VERIFY is the real completeness check -
+   *    the dongle refuses it with SEQ_ERROR when bytes are missing.
+   *  - ACTIVATE does not end in COMPLETE. The dongle answers ACTIVATING, copies
+   *    the staged image over itself from RAM and resets; the USB device simply
+   *    disappears. That disappearance is the success signal, and reconnecting
+   *    is the caller's job.
+   *
+   * image: { data, baseAddress, crc32 } - an app-only image from a .hex
+   * (parseAppHex), written at baseAddress (0x1000 on the MS88SF2 dongle).
+   *
+   * onEvent stages: begin, data {done,total,bytes,size,speed}, verify, activate.
+   * Resolves on ACTIVATING; throws an mkErr on failure.
+   */
+  async updateDongle(image, boardTarget, onEvent = () => {}){
+    const size = image.data.length;
+    const total = Math.ceil(size / DATA_MAX_PAYLOAD);
+    const imageCrc = image.crc32 !== undefined ? image.crc32 : crc32(image.data);
+    const id = DONGLE_ID;
+    log(`dongle OTA: ${size} B, ${total} packets, base 0x${(image.baseAddress || 0).toString(16)}, ` +
+        `CRC32 0x${imageCrc.toString(16).toUpperCase()}, target "${boardTarget}"`);
+
+    const terminal = r => {
+      const st = parseStatus(r);
+      return st && r[1] === id && TERMINAL.has(st.status) && st.status !== ST.COMPLETE ? st : null;
+    };
+
+    for (let attempt = 1; ; attempt++){
+      /* ---- BEGIN ---- */
+      onEvent({ stage: 'begin', attempt: attempt - 1 });
+      this.d.drain();
+      const sendBegin = () => this.d.begin(id, size, imageCrc, total, boardTarget, image.baseAddress || 0);
+      await sendBegin();
+      const ready = await this.waitStatus([id],
+        new Set([ST.READY, ST.RECEIVING, ST.BOARD_MISMATCH, ST.SIZE_ERROR, ST.ERROR, ST.TIMEOUT]),
+        { timeoutMs: 10000, resend: sendBegin, resendMs: 4000 });
+      const st0 = ready.get(id);
+      if (!st0) throw mkErr('errDongleNoReady');
+      if (st0.status !== ST.READY && st0.status !== ST.RECEIVING) throw statusError(st0.status);
+
+      /* ---- DATA ---- */
+      const started = Date.now();
+      let failed = null;
+      for (let seq = 0; seq < total; seq++){
+        const off = seq * DATA_MAX_PAYLOAD;
+        await this.d.data(id, seq, image.data.subarray(off, off + DATA_MAX_PAYLOAD));
+        if (seq % 32 === 31 || seq === total - 1){
+          for (const r of this.d.drain()){ const bad = terminal(r); if (bad){ failed = bad; break; } }
+          if (failed) break;
+          const bytes = Math.min((seq + 1) * DATA_MAX_PAYLOAD, size);
+          const secs = (Date.now() - started) / 1000;
+          onEvent({ stage: 'data', done: seq + 1, total, bytes, size,
+                    speed: secs > 0 ? bytes / secs / 1024 : 0 });
+        }
+      }
+      if (failed){
+        if (failed.status === ST.SEQ_ERROR && attempt < 2){
+          log('dongle OTA: a packet went missing, restarting the transfer once', 'warn');
+          await this.d.abort(id);
+          await sleep(300);
+          continue;
+        }
+        await this.d.abort(id);
+        throw statusError(failed.status);
+      }
+      log(`dongle OTA: sent ${(size / 1024).toFixed(1)} KB in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+
+      /* ---- VERIFY ---- */
+      onEvent({ stage: 'verify' });
+      await sleep(300);
+      this.d.drain();
+      await this.d.verify(id);
+      const v = (await this.waitStatus([id],
+        new Set([ST.VERIFY_OK, ST.VERIFY_FAIL, ST.SEQ_ERROR, ST.ERROR, ST.FLASH_ERROR]),
+        { timeoutMs: 20000 })).get(id);
+      if (!v){ await this.d.abort(id); throw mkErr('errOtaStalled'); }
+      if (v.status === ST.SEQ_ERROR && attempt < 2){
+        log('dongle OTA: image incomplete at verify, restarting the transfer once', 'warn');
+        await this.d.abort(id);
+        await sleep(300);
+        continue;
+      }
+      if (v.status !== ST.VERIFY_OK){ await this.d.abort(id); throw statusError(v.status); }
+      log('dongle OTA: CRC32 verified');
+
+      /* ---- ACTIVATE ---- */
+      onEvent({ stage: 'activate' });
+      this.d.drain();
+      await this.d.activate(id);
+      const a = (await this.waitStatus([id],
+        new Set([ST.ACTIVATING, ST.COMPLETE, ST.ERROR, ST.FLASH_ERROR]),
+        { timeoutMs: 5000 })).get(id);
+      /* No answer is not a failure here: the dongle may have reset before the
+       * ACTIVATING report left. The caller decides by whether it comes back. */
+      if (a && a.status !== ST.ACTIVATING && a.status !== ST.COMPLETE) throw statusError(a.status);
+      log('dongle OTA: activating, the dongle will reset');
+      return;
+    }
   }
 }

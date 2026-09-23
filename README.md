@@ -24,6 +24,9 @@ There are three update methods. They install the same firmware; only the route d
 
 「準備中」の表示が数秒続くのは正常です。トラッカーが更新用の領域を消去しています。
 
+**Dongle 本体**も同じ画面で更新できます。一覧の一番上に「Dongle 本体」が表示され、新しい版があれば選択済みになっています。Dongle はトラッカーの後に更新され、再起動して自動で再接続します(約 10 秒、その間は抜かないでください)。
+うまくいかず Dongle が動かなくなった場合は、画面下の「**Dongle の復旧**」の手順(ボタン 10 秒長押し → 現れたドライブに `.uf2` をドラッグ&ドロップ)で必ず戻せます。
+
 ### 有線更新
 
 1. USB-TTL 変換基板をトラッカーに接続します(TX→RX、RX→TX、GND 共通)。
@@ -54,6 +57,9 @@ The latest firmware is selected for you; you do not need to pick a file.
 
 A few seconds of "Preparing" is normal — the tracker is erasing its update area.
 
+**The dongle itself** updates from the same screen. It is listed first as "Dongle" and pre-selected when a newer version exists. It is updated after the trackers, restarts and reconnects on its own (about 10 seconds - do not unplug it meanwhile).
+If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom always brings it back: hold its button for 10 seconds, then drag the `.uf2` onto the drive that appears.
+
 ### Wired
 
 1. Wire a USB-TTL adapter to the tracker (TX→RX, RX→TX, common GND).
@@ -83,6 +89,9 @@ A few seconds of "Preparing" is normal — the tracker is erasing its update are
 4. 完成後追蹤器會自動重新啟動。
 
 畫面停在「準備中」數秒是正常的,追蹤器正在抹除更新用的區塊。
+
+**Dongle 本體**也在同一個畫面更新。清單最上面會顯示「Dongle 本體」,有新版本時會預先勾選。Dongle 會在追蹤器之後更新,完成後自動重新啟動並重新連線(約 10 秒,期間請勿拔除)。
+萬一 Dongle 因此無法使用,畫面下方的「**Dongle 救援**」一定能救回來:按住 Dongle 按鈕 10 秒,再把 `.uf2` 拖進出現的磁碟。
 
 ### 有線更新
 
@@ -171,6 +180,20 @@ Update `firmware/<device>/latest.json` and drop the files beside it.
 トラッカー側は private、こちらは public なので、既定の `GITHUB_TOKEN` では
 届きません。
 
+#### Dongle
+
+Receiver リポジトリの Build Receiver workflow の成果物に `web-manager/` フォルダがあり、
+中身(`nekotora-dongle-<ver>.hex`、`.uf2`、`latest.json`)をそのまま
+`firmware/dongle/` に置けば公開完了です。版数はトラッカーと同じく Receiver
+リポジトリの x.y.z tag から来ます。
+The Build Receiver workflow's artifact contains `web-manager/`; copy its contents
+into `firmware/dongle/`. 把 Receiver CI 成果物裡 `web-manager/` 的內容整個放進 `firmware/dongle/` 即可。
+
+- `hex` はアプリ部分だけのイメージ(0x1000 から、UF2 bootloader を含まない)。
+  ページはこれを Dongle 自身の USB HID 経由で書き込みます(receiver self-OTA)。
+- `uf2` は復旧用。ページの「Dongle の復旧」からダウンロードされます。
+- `boardTarget` は `promicro_uf2/nrf52840`(Dongle の `CONFIG_BOARD_TARGET`)。
+
 ### テスト / Tests
 
 ```
@@ -183,3 +206,8 @@ node test/run.mjs
 - `test/smp.test.mjs` — SMP framing round-trip, CRC-16 vector, upload to completion.
 - `test/ui.test.mjs` — loads the real page in jsdom: method switching, gating,
   and that every string resolves in all three languages.
+- `test/dongle.test.mjs` — dongle self-update against a fake that follows
+  receiver_ota.c: strict sequencing, a lost packet, board mismatch, CRC failure,
+  the reset that replaces COMPLETE, and the app-only .hex parsing.
+- `test/dongle-ui.test.mjs` — the same through the real page: version row,
+  pre-selection, update, reset, reconnect and the version check afterwards.

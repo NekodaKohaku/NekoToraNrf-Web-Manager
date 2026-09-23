@@ -100,3 +100,22 @@ export async function fetchImage(manifest, want){
     text: want === 'hex' ? await r.text() : null,
   };
 }
+
+/* The dongle's own firmware, when the product has one (devices.json
+ * "dongleManifest"). Same manifest shape as a tracker's, with "hex" (the
+ * app-only image the page writes over USB) and "uf2" (drag-and-drop recovery)
+ * instead of "bin". A product without the field simply has no dongle row. */
+export async function loadDongleManifest(dev){
+  if (!dev || !dev.dongleManifest) return null;
+  const url = resolve(location.href, dev.dongleManifest);
+  const r = await fetch(url, { cache: 'no-cache' });
+  if (!r.ok) throw mkErr('fwLoadFailed', { err: 'HTTP ' + r.status });
+  const m = await r.json();
+  m._base = url;
+  return m;
+}
+
+/* Absolute URL of a manifest-relative file, for download links. */
+export function manifestFileUrl(manifest, file){
+  return resolve(manifest._base, file);
+}

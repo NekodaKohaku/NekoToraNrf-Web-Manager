@@ -11,13 +11,13 @@
  * handling and three sets of translations, drifting apart over time.
  */
 import { CONFIG, DFU_BAUD } from './config.js';
-import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb } from './util.js';
+import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb, sleep } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
-import { parseUpdateBin, looksLikeUpdateBin } from './image.js';
+import { parseUpdateBin, looksLikeUpdateBin, parseAppHex } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
-import { Dongle, OtaClient } from './ota.js';
+import { Dongle, OtaClient, DONGLE_ID } from './ota.js';
 import { SmpPort, enterRecovery, uploadImage } from './smp.js';
 import * as reg from './registry.js';
 
@@ -55,6 +55,9 @@ const state = {
   tr: null, dap: null, probeName: '',
   // wireless
   dongle: null, ota: null, trackers: new Map(), selected: new Set(),
+  // the dongle itself (receiver self-OTA)
+  dongleManifest: null, dongleInfo: null, dongleQuerying: false,
+  dongleSelected: false, dongleRebooting: false,
   // wired
   smp: null, port: null, inRecovery: false,
 };
@@ -113,9 +116,9 @@ function renderTrackerProgress(per){
       el.className = 'tp';
       el.dataset.tid = row.id;
       el.innerHTML = '<span class="tpName"></span><span class="tpBar"><div></div></span><span class="tpState"></span>';
-      el.querySelector('.tpName').textContent = t('otaTracker', { id: row.id });
       box.appendChild(el);
     }
+    el.querySelector('.tpName').textContent = row.name || t('otaTracker', { id: row.id });
     el.className = 'tp' + (row.state === 'failed' ? ' failed'
                         : row.state === 'complete' ? ' complete' : '');
     el.querySelector('.tpBar > div').style.width =
@@ -169,7 +172,7 @@ function renderConnect(){
     st.textContent = state.dongle ? t('otaDongleOk', { name: state.dongle.name }) : t('otaDongleNone');
     if (state.dongle) st.classList.add('ok');
     $('btnRescan').classList.toggle('hidden', !state.dongle);
-    $('otaPick').classList.toggle('hidden', !state.dongle || !state.trackers.size);
+    $('otaPick').classList.toggle('hidden', !state.dongle);
   } else {
     st.textContent = state.port ? t('dfuPortOk') : t('dfuPortNone');
     if (state.port) st.classList.add('ok');
@@ -180,7 +183,67 @@ function renderConnect(){
   }
 }
 
+/* The dongle's own row, above the trackers.
+ *
+ * Kept out of state.trackers on purpose: it is not a tracker, its id (0xFE)
+ * is not an ESB id, its firmware comes from a different manifest, and it is
+ * always updated last - its reset ends the USB session everything else rides
+ * on. */
+function dongleVerdict(){
+  const m = state.dongleManifest, info = state.dongleInfo;
+  if (state.dongleQuerying) return { eligible: false, info: t('otaQuerying'), badge: '…' };
+  if (!info) return { eligible: false, info: t('dongleNoInfo'), badge: '?' };
+  const ver = info.version + ' · ' + info.bootloader;
+  if (!m) return { eligible: false, info: ver, badge: t('dongleNoFw') };
+  if (info.bootloader !== 'adafruit_uf2'){
+    return { eligible: false, info: ver, badge: t('dongleUnsupported'), cls: 'warn' };
+  }
+  if (m.boardTarget && info.boardTarget !== m.boardTarget){
+    return { eligible: false, info: ver, badge: t('otaMismatch', { board: info.boardTarget || '?' }), cls: 'warn' };
+  }
+  if (info.versionCode >= m.versionCode) return { eligible: true, outdated: false, info: ver, badge: t('otaUpToDate'), cls: 'ok' };
+  return { eligible: true, outdated: true, info: ver,
+           badge: t('otaNeedsUpdate', { from: info.version, to: m.version }), cls: 'upd' };
+}
+
+function renderDongle(){
+  const list = $('dongleList');
+  list.innerHTML = '';
+  if (!state.dongle) return;
+  const v = dongleVerdict();
+  const row = document.createElement('div');
+  row.className = 'trk' + (v.eligible ? '' : ' dim');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = state.dongleSelected && v.eligible;
+  cb.disabled = !v.eligible;
+  cb.onchange = () => { state.dongleSelected = cb.checked; renderSelCount(); gate(); };
+  const name = document.createElement('span');
+  name.className = 'tName wide';
+  name.textContent = t('dongleRow');
+  const info = document.createElement('span');
+  info.className = 'tInfo';
+  info.textContent = v.info;
+  const badge = document.createElement('span');
+  badge.className = 'tState' + (v.cls ? ' ' + v.cls : '');
+  badge.textContent = v.badge;
+  row.append(cb, name, info, badge);
+  list.appendChild(row);
+}
+
+function renderRescue(){
+  const m = state.dongleManifest;
+  const show = state.method === 'ota' && !!(m && m.uf2);
+  $('dongleRescue').classList.toggle('hidden', !show);
+  if (!show) return;
+  const a = $('rescueLink');
+  a.href = reg.manifestFileUrl(m, m.uf2);
+  a.textContent = m.uf2;
+  $('btnRescue').classList.toggle('hidden', !state.dongle || state.busy);
+}
+
 function renderTrackers(){
+  renderDongle();
   const list = $('trackerList');
   list.innerHTML = '';
   const want = state.manifest && state.manifest.boardTarget;
@@ -252,7 +315,7 @@ function renderTrackers(){
 }
 
 function renderSelCount(){
-  const n = state.selected.size;
+  const n = state.selected.size + (state.dongleSelected ? 1 : 0);
   $('otaSelCount').textContent = n ? t('otaSelected', { n }) : '';
 }
 
@@ -293,7 +356,9 @@ function renderFirmware(){
   if (state.manifest){
     $('fwLine').textContent = t('fwLatest', {
       v: state.manifest.version, date: state.manifest.date || '',
-    });
+    }) + (state.method === 'ota' && state.dongleManifest
+      ? '\n' + t('fwDongle', { v: state.dongleManifest.version, date: state.dongleManifest.date || '' })
+      : '');
     badge.textContent = state.manifest.version;
     badge.classList.add('ok');
   } else {
@@ -310,8 +375,8 @@ function connected(){
 }
 function readyToStart(){
   if (!connected()) return false;
-  if (!state.manifest && !state.manualFw) return false;
-  if (state.method === 'ota' && !state.selected.size) return false;
+  if (!state.manifest && !state.manualFw && !(state.method === 'ota' && state.dongleSelected)) return false;
+  if (state.method === 'ota' && !state.selected.size && !state.dongleSelected) return false;
   if (state.method === 'dfu' && !state.inRecovery) return false;
   return true;
 }
@@ -347,6 +412,7 @@ function showView(v){
 function refresh(){
   renderMethods(); renderConnect(); renderFirmware();
   if (state.method === 'ota') renderTrackers();
+  renderRescue();
   gate();
 }
 
@@ -371,6 +437,7 @@ async function dropConnections(){
   state.port = null;
   if (state.tr){ try { await state.tr.close(); } catch (_) {} state.tr = null; state.dap = null; }
   state.trackers.clear(); state.selected.clear(); state.inRecovery = false;
+  state.dongleInfo = null; state.dongleSelected = false;
   /* Whatever identified itself is gone, so the banner saying so has to go too. */
   $('devDetected').classList.add('hidden');
   $('connErr').classList.add('hidden');
@@ -390,6 +457,16 @@ async function loadManifestFor(dev, { detected = false } = {}){
   $('devDetected').classList.toggle('hidden', !(dev && detected));
   if (!dev){ state.manifest = null; renderFirmware(); return; }
   if (detected) $('devDetected').textContent = t('autoDetected', { name: reg.devName(dev) });
+  /* Independent of the tracker manifest: a product that has not published
+   * dongle firmware yet still updates trackers, it just shows no dongle row. */
+  try {
+    state.dongleManifest = await reg.loadDongleManifest(dev);
+    if (state.dongleManifest) log(`dongle manifest: ${state.dongleManifest.version} (code ${state.dongleManifest.versionCode})`);
+  } catch (e){
+    state.dongleManifest = null;
+    log('dongle manifest: none (' + errText(e) + ')', 'warn');
+  }
+  renderRescue();
   try {
     state.manifest = await reg.loadManifest(dev);
     log(`manifest: ${state.manifest.version} (code ${state.manifest.versionCode})`);
@@ -490,6 +567,22 @@ async function connectDongle(){
   } catch (e){ connFail(e); }
 }
 
+/* Ask the dongle what it is running. No answer means firmware from before
+ * receiver self-OTA existed - it can only be brought forward once by the
+ * UF2 route, after which it updates here like everything else. */
+async function queryDongle(){
+  state.dongleQuerying = true;
+  renderDongle();
+  try { state.dongleInfo = await state.ota.queryInfo(DONGLE_ID, 3000); }
+  catch (_) { state.dongleInfo = null; }
+  state.dongleQuerying = false;
+  const v = dongleVerdict();
+  state.dongleSelected = !!(v.eligible && v.outdated);
+  if (state.dongleInfo) log(`dongle: ${state.dongleInfo.version} (${state.dongleInfo.bootloader}, ${state.dongleInfo.boardTarget})`);
+  else log('dongle: no firmware info (self-update not supported by its firmware)', 'warn');
+  renderDongle(); renderSelCount();
+}
+
 async function scanTrackers(){
   if (!state.ota) return;
   state.busy = true;
@@ -497,6 +590,7 @@ async function scanTrackers(){
   $('otaNote').textContent = t('otaScanning');
   gate();
   try {
+    await queryDongle();
     const found = await state.ota.discoverTrackers(1800);
     state.trackers = new Map([...found].map(([id, v]) => [id, { ...v, info: null, querying: v.online }]));
     state.selected.clear();
@@ -598,15 +692,18 @@ async function start(){
   renderTrackerProgress(null);
 
   try {
-    const fw = await resolveImage();
-    if (state.method === 'ota') await runOta(fw);
-    else if (state.method === 'dfu') await runDfu(fw);
-    else await runSwd(fw);
+    if (state.method === 'ota') await runOta();
+    else {
+      const fw = await resolveImage();
+      if (state.method === 'dfu') await runDfu(fw);
+      else await runSwd(fw);
+    }
   } catch (e){
     log('update failed: ' + errText(e), 'err');
     /* The SWD failure advice is about the button and re-plugging USB, which
      * only makes sense for SWD. */
-    $('badHint').textContent = t(state.method === 'swd' ? 'failHint' : 'failHintPlain');
+    $('badHint').textContent = t(state.method === 'swd' ? 'failHint'
+      : e && e.dongle ? 'dongleFailHint' : 'failHintPlain');
     $('errDetail').textContent = errText(e);
     showView('bad');
   } finally {
@@ -615,9 +712,16 @@ async function start(){
   }
 }
 
-async function runOta(fw){
+/* Progress-row id for the dongle: sorts after every tracker id (0-63) and
+ * cannot collide with one. */
+const DONGLE_ROW = 255;
+
+async function runOta(){
   const ids = [...state.selected].sort((a, b) => a - b);
+  const doDongle = state.dongleSelected;
   const board = (state.manifest && state.manifest.boardTarget) || '';
+  const fw = ids.length ? await resolveImage() : null;
+  const N = ids.length + (doDongle ? 1 : 0);
   makePhases(true);
 
   /* One tracker at a time. See OTA_SEQUENTIAL in config.js for why: the
@@ -628,6 +732,7 @@ async function runOta(fw){
    * current update reports, so finished and queued trackers stay on screen
    * instead of the list collapsing to one row at a time. */
   const batch = new Map(ids.map(id => [id, { id, pct: 0, state: 'queued' }]));
+  if (doDongle) batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: 0, state: 'queued' });
   const paint = () => renderTrackerProgress([...batch.values()]);
   paint();
 
@@ -645,11 +750,11 @@ async function runOta(fw){
       }
       if (ev.stage === 'begin'){
         setStage('otaStageBegin');
-        setDetail(ids.length > 1 ? t('otaBatch', label) : '');
+        setDetail(N > 1 ? t('otaBatch', { ...label, n: N }) : '');
       } else if (ev.stage === 'data'){
         setStage('otaStageData');
-        setDetail(ids.length > 1
-          ? t('otaBatch', label) + ' · ' + t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) })
+        setDetail(N > 1
+          ? t('otaBatch', { ...label, n: N }) + ' · ' + t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) })
           : t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) }));
       } else if (ev.stage === 'verify'){
         setStage('otaStageVerify');
@@ -662,7 +767,7 @@ async function runOta(fw){
                    : ev.stage === 'verify' ? 0.95
                    : ev.stage === 'activate' || ev.stage === 'done' ? 1
                    : 0;
-      setBar((i + within) / ids.length);
+      setBar((i + within) / N);
       paint();
     });
 
@@ -677,18 +782,132 @@ async function runOta(fw){
     paint();
   }
 
+  /* The dongle goes last: its reset ends the USB session the trackers were
+   * being updated through. */
+  let dongleNote = '';
+  if (doDongle){
+    batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: 0, state: 'sending' });
+    paint();
+    const label = { i: N, n: N };
+    try {
+      const res = await runDongleUpdate(ev => {
+        if (ev.stage === 'data'){
+          setStage('dongleStageData');
+          setDetail((N > 1 ? t('dongleBatch', label) + ' · ' : '') +
+            t('otaProgress', { done: kb(ev.bytes), total: kb(ev.size), speed: ev.speed.toFixed(1) }));
+          batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: ev.done / ev.total, state: 'sending' });
+        } else {
+          const key = { begin: 'dongleStageBegin', verify: 'otaStageVerify',
+                        activate: 'dongleStageActivate', reconnect: 'dongleStageReconnect' }[ev.stage];
+          if (key) setStage(key);
+          if (ev.stage !== 'begin') setDetail(N > 1 ? t('dongleBatch', label) : '');
+          const st = ev.stage === 'verify' ? 'verifying' : ev.stage === 'begin' ? 'sending' : 'activating';
+          batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: ev.stage === 'begin' ? 0 : 1, state: st });
+        }
+        const within = ev.stage === 'data' ? ev.done / ev.total * 0.8
+                     : ev.stage === 'verify' ? 0.82 : ev.stage === 'activate' ? 0.88
+                     : ev.stage === 'reconnect' ? 0.94 : 0;
+        setBar((N - 1 + within) / N);
+        paint();
+      });
+      ok.push(DONGLE_ROW);
+      batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: 1, state: 'complete' });
+      dongleNote = res.reconnected ? t('dongleOkHint', { v: res.version })
+                                   : t('dongleReconnectManual');
+    } catch (e){
+      e.dongle = true;
+      failed.push({ id: DONGLE_ROW, error: e });
+      batch.set(DONGLE_ROW, { id: DONGLE_ROW, name: t('dongleRow'), pct: 0, state: 'failed', error: e });
+      log('dongle update failed: ' + errText(e), 'err');
+    }
+    paint();
+  }
+
   setBar(1);
   if (!ok.length) throw (failed.length ? failed[0].error : mkErr('errOtaNoReady'));
 
+  const trackersOk = ok.filter(id => id !== DONGLE_ROW).length;
   $('okTitle').textContent = t('success');
-  $('okHint').textContent = failed.length
-    ? t('otaPartial', { ok: ok.length, fail: failed.length })
-    : ids.length > 1 ? t('otaAllDone', { n: ok.length }) : t('otaOkHint');
+  $('okHint').textContent = [
+    failed.length ? t('otaPartial', { ok: ok.length, fail: failed.length })
+      : ids.length > 1 ? t('otaAllDone', { n: trackersOk })
+      : ids.length ? t('otaOkHint') : '',
+    dongleNote,
+    failed.some(f => f.id === DONGLE_ROW) ? t('dongleFailHint') : '',
+  ].filter(Boolean).join('\n');
   showView('ok');
   /* Versions on screen are now stale - the trackers rebooted into new
    * firmware. Re-reading them avoids showing "update available" for something
    * just updated. */
   setTimeout(() => { scanTrackers().catch(() => {}); }, 3000);
+}
+
+/* Fetch the dongle image, send it, and bring the connection back afterwards.
+ *
+ * The dongle resets into the new firmware, so the HID device this page holds
+ * disappears. Chrome remembers the permission for a device with a serial
+ * number, so the replacement normally shows up in getDevices() without the
+ * user picking it again; when it does not, that is reported as "reconnect by
+ * hand" rather than as a failure, because the update itself went through.
+ */
+async function runDongleUpdate(onEvent){
+  const m = state.dongleManifest;
+  if (!m || !m.hex) throw mkErr('fwLoadFailed', { err: 'no dongle firmware' });
+  const got = await reg.fetchImage(m, 'hex');
+  const img = parseAppHex(got.text, got.name);
+  const old = state.dongle.device;
+
+  state.dongleRebooting = true;
+  try {
+    await state.ota.updateDongle(img, m.boardTarget || '', onEvent);
+    onEvent({ stage: 'reconnect' });
+    const dev = await waitDongleBack(old);
+    /* The old handle points at a device that no longer exists; drop its
+     * listener so nothing is left reading from it. */
+    const stale = state.dongle;
+    state.dongle = null; state.ota = null;
+    await stale.close().catch(() => {});
+    if (!dev) return { reconnected: false };
+
+    const d = new Dongle(dev);
+    await d.open();
+    state.dongle = d;
+    state.ota = new OtaClient(d);
+    log('dongle reconnected: ' + d.name);
+    await sleep(500);
+    const info = await state.ota.queryInfo(DONGLE_ID, 4000);
+    state.dongleInfo = info;
+    if (!info || info.versionCode !== m.versionCode){
+      /* The bootloader rejected the copy and the old application is still
+       * running, or something else answered. Either way it is not updated. */
+      throw mkErr('errDongleVersion', { got: info ? info.version : '?', want: m.version });
+    }
+    return { reconnected: true, version: info.version };
+  } finally {
+    state.dongleRebooting = false;
+  }
+}
+
+async function waitDongleBack(old){
+  /* First it has to go away - activation copies the image, then resets. A
+   * dongle still present after this long never started the copy. */
+  const goneBy = Date.now() + 20000;
+  while (Date.now() < goneBy){
+    const devs = await navigator.hid.getDevices();
+    if (!devs.includes(old) || !old.opened) break;
+    await sleep(250);
+  }
+  if (old.opened && (await navigator.hid.getDevices()).includes(old)){
+    throw mkErr('errDongleNoReset');
+  }
+  const backBy = Date.now() + 20000;
+  while (Date.now() < backBy){
+    for (const dev of await navigator.hid.getDevices()){
+      if (dev !== old && reg.matchDongle(dev.productName)) return dev;
+    }
+    await sleep(500);
+  }
+  return null;
 }
 
 async function runDfu(fw){
@@ -803,6 +1022,15 @@ async function init(){
   $('btnConnect').onclick = connectUsb;
   $('btnConnectHid').onclick = connectProbeHid;
   $('btnConnectDongle').onclick = connectDongle;
+  $('btnRescue').onclick = async () => {
+    if (!state.dongle) return;
+    try {
+      await state.dongle.enterUf2();
+      log('dongle: asked to reboot into the UF2 bootloader');
+      $('otaNote').textContent = t('rescueSent');
+      $('otaNote').classList.remove('hidden');
+    } catch (e){ connFail(e); }
+  };
   $('btnRescan').onclick = () => scanTrackers().catch(e => connFail(e));
   $('btnConnectSerial').onclick = connectSerial;
   $('btnEnterDfu').onclick = doEnterRecovery;
@@ -845,7 +1073,11 @@ async function init(){
   if (navigator.hid){
     navigator.hid.addEventListener('disconnect', e => {
       if (state.dongle && state.dongle.device === e.device){
+        /* Expected while the dongle is updating itself; runDongleUpdate()
+         * reconnects on its own. */
+        if (state.dongleRebooting){ log('dongle reset (updating itself)'); return; }
         state.dongle = null; state.ota = null;
+        state.dongleInfo = null; state.dongleSelected = false;
         state.trackers.clear(); state.selected.clear();
         $('devDetected').classList.add('hidden');
         log('dongle disconnected', 'warn');

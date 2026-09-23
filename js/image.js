@@ -16,6 +16,7 @@
  * never letting the user pick the file by hand in the normal flow.
  */
 import { mkErr, crc32 } from './util.js';
+import { parseIntelHex } from './hex.js';
 
 /* MCUboot image header magic, little-endian at offset 0. */
 export const MCUBOOT_IMAGE_MAGIC = 0x96F3B83D;
@@ -39,5 +40,43 @@ export function parseUpdateBin(bytes, name){
     baseAddress: 0,
     crc32: crc32(bytes),
     size: bytes.length,
+  };
+}
+
+/* ------------------------------ dongle ---------------------------------- */
+
+/* Where a dongle's self-update may write (receiver src/receiver_ota.c).
+ * Below 0x1000 is the MBR; the UF2 bootloader and its settings page sit far
+ * above DONGLE_APP_END, and the dongle refuses anything reaching past it. */
+export const DONGLE_APP_MIN = 0x1000;
+export const DONGLE_APP_END = 0xDA000;
+
+/* The dongle is updated from an app-only Intel HEX: the image the receiver CI
+ * builds for its UF2 bootloader, starting at 0x1000 and containing neither the
+ * MBR nor the bootloader. The page turns it into one contiguous block (gaps
+ * filled with 0xFF, as flash reads when erased) plus the address it belongs
+ * at, which is what the dongle's OTA BEGIN takes.
+ *
+ * A tracker .hex is refused here on purpose: it starts at 0x0 with MCUboot in
+ * it, and written over a dongle's application it would never boot. */
+export function parseAppHex(text, name){
+  const segs = parseIntelHex(text);
+  let lo = Infinity, hi = 0;
+  for (const s of segs){
+    lo = Math.min(lo, s.start);
+    hi = Math.max(hi, s.start + s.data.length);
+  }
+  if (lo < DONGLE_APP_MIN || hi > DONGLE_APP_END){
+    throw mkErr('errWrongFormat', { want: 'nekotora-dongle-*.hex' });
+  }
+  const data = new Uint8Array(hi - lo).fill(0xFF);
+  for (const s of segs) data.set(s.data, s.start - lo);
+  return {
+    kind: 'app',
+    name: name || 'dongle.hex',
+    data,
+    baseAddress: lo,
+    crc32: crc32(data),
+    size: data.length,
   };
 }

@@ -80,3 +80,37 @@ export function parseAppHex(text, name){
     size: data.length,
   };
 }
+
+/* ------------------------- manual file picking --------------------------- */
+
+const UF2_MAGIC_START0 = 0x0A324655;   // "UF2\n"
+
+/* What a firmware file is for, from its content - never from its name.
+ *
+ *   uf2         dongle recovery image; only the UF2 bootloader's drive takes it
+ *   trackerBin  MCUboot update image (.update.bin): wireless or wired
+ *   trackerHex  Intel HEX starting below 0x1000 (bootloader included), or a
+ *               signed application HEX: SWD only
+ *   dongleHex   Intel HEX starting at 0x1000 or above without an MCUboot
+ *               header: the dongle's application, wireless only
+ *   unknown     anything else
+ */
+export function classifyFirmwareFile(bytes){
+  if (!bytes || !bytes.length) return 'unknown';
+  if (bytes.length >= 512){
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, 4);
+    if (dv.getUint32(0, true) === UF2_MAGIC_START0) return 'uf2';
+  }
+  if (looksLikeUpdateBin(bytes)) return 'trackerBin';
+  const text = new TextDecoder().decode(bytes);
+  if (!text.trimStart().startsWith(':')) return 'unknown';
+  let segs;
+  try { segs = parseIntelHex(text); } catch (_) { return 'unknown'; }
+  if (!segs.length) return 'unknown';
+  let first = segs[0];
+  for (const s of segs) if (s.start < first.start) first = s;
+  if (first.start < DONGLE_APP_MIN) return 'trackerHex';
+  const d = first.data;
+  const magic = d.length >= 4 && (d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24)) >>> 0;
+  return magic === MCUBOOT_IMAGE_MAGIC ? 'trackerHex' : 'dongleHex';
+}

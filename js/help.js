@@ -1,0 +1,249 @@
+/* Help page: status lights, buttons, common questions.
+ *
+ * Kept as data per language rather than as i18n keys: it is a document, not
+ * UI chrome, and reading it top to bottom in one place is what keeps the three
+ * languages saying the same thing. Sources: tracker docs/led.md and
+ * src/system/system.c (buttons), receiver src/system/system.c (dongle
+ * buttons) and src/main.c (hold at power-up). Defaults of the standard build;
+ * a custom build can differ.
+ */
+
+/* Light patterns as [brightness 0..1, ms] segments, repeated. Colours are the
+ * RGB build's; a single-colour LED keeps the timing and ignores the colour. */
+const Q = [[1, 200], [0, 200]];                       // one "quick" blink
+const quick = (n, pauseMs = 0) => [...Array(n).fill(Q).flat(), ...(pauseMs ? [[0, pauseMs]] : [])];
+
+const C = {
+  def: 'rgb(102,153,0)', ok: 'rgb(0,200,60)', err: 'rgb(230,30,30)', chg: 'rgb(230,90,0)',
+  pair: 'rgb(30,90,255)', doze: 'rgb(140,40,255)', ping: 'rgb(255,255,255)', cal: 'rgb(0,200,255)',
+};
+
+const LED = [
+  { k: 'normal',   c: C.def,  seq: [[1, 300], [0, 9700]] },
+  { k: 'boot',     c: C.def,  seq: quick(3, 2000) },
+  { k: 'dozeIn',   c: C.doze, seq: quick(2, 2400) },
+  { k: 'dozing',   c: null,   seq: [[0, 1000]] },
+  { k: 'pairing',  c: C.pair, seq: [[1, 100], [0, 900]] },
+  { k: 'paired',   c: C.ok,   seq: quick(4, 1600) },
+  { k: 'ping',     c: C.ping, seq: quick(10, 1000) },
+  { k: 'calStill', c: C.cal,  seq: [[1, 500], [0, 500]] },
+  { k: 'calRec',   c: C.cal,  seq: [[1, 1000]] },
+  { k: 'charging', c: C.chg,  breathe: 5000 },
+  { k: 'charged',  c: C.ok,   seq: [[0.2, 1000]] },
+  { k: 'lowBatt',  c: C.chg,  seq: [[0.2, 500], [0, 500]] },
+  { k: 'errSensor',   c: C.err, seq: quick(2, 4200) },
+  { k: 'errReceiver', c: C.err, seq: quick(3, 3800) },
+  { k: 'errSystem',   c: C.err, seq: quick(4, 3400) },
+];
+
+const TEXT = {
+  zh: {
+    ledTitle: '追蹤器燈號',
+    ledDesc: '下面的圓點會照實際節奏閃爍。單色 LED 節奏相同，只是沒有顏色。',
+    cols: ['狀態', '燈號', '示範'],
+    led: {
+      normal: ['正常運作', '每 10 秒亮 0.3 秒'],
+      boot: ['開機、從 doze 醒來', '快閃 3 下'],
+      dozeIn: ['進入 doze', '紫色快閃 2 下後熄滅'],
+      dozing: ['doze 中', '不亮'],
+      pairing: ['配對模式', '藍色，亮 0.1 秒、暗 0.9 秒'],
+      paired: ['配對完成', '綠色快閃 4 下'],
+      ping: ['找追蹤器', '白色快閃 10 下'],
+      calStill: ['校正：請保持不動', '青色，0.5 秒亮暗'],
+      calRec: ['校正：記錄中', '青色恆亮'],
+      charging: ['充電中', '橘色，5 秒呼吸'],
+      charged: ['已充飽', '綠色微亮'],
+      lowBatt: ['電量低', '橘色微亮閃爍'],
+      errSensor: ['錯誤：感測器', '紅色，每 5 秒閃 2 下'],
+      errReceiver: ['錯誤：找不到接收器', '紅色，每 5 秒閃 3 下'],
+      errSystem: ['錯誤：系統（例如電池讀數異常）', '紅色，每 5 秒閃 4 下'],
+    },
+    trkBtnTitle: '追蹤器按鈕',
+    dglBtnTitle: 'Dongle 按鈕',
+    btnCols: ['操作', '作用'],
+    trkBtn: [
+      ['按一下', '沒有動作；doze 中則喚醒追蹤器'],
+      ['快按 2 下', '陀螺儀校正（放著不動）'],
+      ['快按 3 下', '進入配對模式'],
+      ['快按 4 下', '進入有線更新模式（DFU）'],
+      ['長按', '關機（放開按鈕後才關）'],
+    ],
+    dglBtn: [
+      ['按一下', '有醒著的追蹤器就全部 doze，否則全部喚醒'],
+      ['快按 2 下', '結束配對模式'],
+      ['快按 3 下', '開始配對模式'],
+      ['快按 4 下', '所有追蹤器關機'],
+      ['按住 5 秒後放開', '清除所有配對'],
+      ['按住 10 秒', '進入救援模式（UF2），用來拖放 .uf2 檔'],
+      ['插上電腦時按住超過 5 秒', '清除所有配對'],
+    ],
+    btnNote: '以上是標準韌體的設定。',
+    faqTitle: '常見問題',
+    faq: [
+      ['追蹤器常斷線，或頻道掃描每個頻道都很擁擠', 'Dongle 可能太靠近 USB 3.0 的連接埠、線材或集線器，它們會干擾整個 2.4 GHz。改插 USB 2.0 連接埠，或用延長線把 Dongle 拉開 30 公分以上。'],
+      ['清單顯示「doze 或關機」', '按一下 Dongle，或在「管理」按「全部喚醒」。還是沒反應，就是關機了，請按追蹤器按鈕開機。'],
+      ['無線更新時選不到某顆追蹤器', '可能電量低於 20%（插上充電就能選）、在 doze（按「喚醒並重新檢查」），或型號和韌體不符。'],
+      ['更新失敗了', '傳輸中斷不會讓追蹤器變磚，原本的韌體還在，重試即可。把追蹤器放近 Dongle 再試。'],
+      ['Dongle 更新後沒有反應', '到「更新」頁最下方的「Dongle 救援」：按住 Dongle 按鈕 10 秒，把 .uf2 拖進出現的磁碟機。'],
+      ['換頻道後有追蹤器沒跟上', '只要是四個匯合頻道（76、2、24、50），它會在約 30 秒內自己找回來；當時關機的，開機後也會找回來。'],
+      ['要用什麼瀏覽器', '電腦版 Chrome 或 Edge。手機和 Safari、Firefox 不支援。'],
+    ],
+  },
+  en: {
+    ledTitle: 'Tracker lights',
+    ledDesc: 'The dots below blink at the real timing. A single-colour LED keeps the timing without the colour.',
+    cols: ['State', 'Light', 'Example'],
+    led: {
+      normal: ['Normal operation', '0.3 s on every 10 s'],
+      boot: ['Power-on, waking from doze', '3 quick blinks'],
+      dozeIn: ['Entering doze', '2 quick purple blinks, then dark'],
+      dozing: ['Dozing', 'Off'],
+      pairing: ['Pairing mode', 'Blue, 0.1 s on / 0.9 s off'],
+      paired: ['Paired', '4 quick green blinks'],
+      ping: ['Find my tracker', '10 quick white blinks'],
+      calStill: ['Calibration: hold still', 'Cyan, 0.5 s on / off'],
+      calRec: ['Calibration: recording', 'Cyan, steady'],
+      charging: ['Charging', 'Orange, 5 s breathing'],
+      charged: ['Charged', 'Dim green'],
+      lowBatt: ['Low battery', 'Dim orange blinking'],
+      errSensor: ['Error: sensor', 'Red, 2 blinks every 5 s'],
+      errReceiver: ['Error: no receiver', 'Red, 3 blinks every 5 s'],
+      errSystem: ['Error: system (e.g. implausible battery reading)', 'Red, 4 blinks every 5 s'],
+    },
+    trkBtnTitle: 'Tracker button',
+    dglBtnTitle: 'Dongle button',
+    btnCols: ['Press', 'What it does'],
+    trkBtn: [
+      ['Once', 'Nothing; wakes the tracker when it is dozing'],
+      ['Twice quickly', 'Gyro calibration (leave it still)'],
+      ['3 times quickly', 'Pairing mode'],
+      ['4 times quickly', 'Wired update mode (DFU)'],
+      ['Hold', 'Power off (after you let go)'],
+    ],
+    dglBtn: [
+      ['Once', 'Dozes all trackers if any is awake, otherwise wakes them all'],
+      ['Twice quickly', 'Stop pairing mode'],
+      ['3 times quickly', 'Start pairing mode'],
+      ['4 times quickly', 'Switch all trackers off'],
+      ['Hold 5 s, release', 'Clear all pairings'],
+      ['Hold 10 s', 'Recovery mode (UF2), for dropping in a .uf2 file'],
+      ['Hold over 5 s while plugging in', 'Clear all pairings'],
+    ],
+    btnNote: 'These are the standard firmware settings.',
+    faqTitle: 'Common questions',
+    faq: [
+      ['Trackers drop out, or every channel looks busy in a scan', 'The dongle is probably too close to a USB 3.0 port, cable or hub; they disturb the whole 2.4 GHz band. Use a USB 2.0 port, or an extension cable that puts the dongle 30 cm or more away.'],
+      ['The list says "Dozing or off"', 'Press the dongle button once, or "Wake all" under Manage. If it still does not respond it is switched off - press the tracker button.'],
+      ['A tracker cannot be selected for a wireless update', 'Its battery may be under 20% (plug it in to charge and it becomes selectable), it may be dozing ("Wake and check again"), or its model does not match the firmware.'],
+      ['The update failed', 'An interrupted transfer does not brick the tracker - the old firmware is still there. Try again with the tracker closer to the dongle.'],
+      ['The dongle does nothing after its update', 'Use "Dongle recovery" at the bottom of the Update page: hold the dongle button for 10 seconds and drag the .uf2 onto the drive that appears.'],
+      ['A tracker did not follow a channel change', 'On the four rendezvous channels (76, 2, 24, 50) it finds its way back within about 30 seconds; one that was switched off does so after it is switched on.'],
+      ['Which browser?', 'Desktop Chrome or Edge. Phones, Safari and Firefox are not supported.'],
+    ],
+  },
+  ja: {
+    ledTitle: 'トラッカーのランプ',
+    ledDesc: '下の丸は実際のタイミングで点滅します。単色 LED はタイミングだけ同じで色はありません。',
+    cols: ['状態', 'ランプ', '例'],
+    led: {
+      normal: ['通常動作', '10 秒ごとに 0.3 秒点灯'],
+      boot: ['電源オン、doze からの復帰', '素早く 3 回点滅'],
+      dozeIn: ['doze に入る', '紫で素早く 2 回点滅して消灯'],
+      dozing: ['doze 中', '消灯'],
+      pairing: ['ペアリングモード', '青、0.1 秒点灯・0.9 秒消灯'],
+      paired: ['ペアリング完了', '緑で素早く 4 回点滅'],
+      ping: ['トラッカーを探す', '白で素早く 10 回点滅'],
+      calStill: ['キャリブレーション:静止', 'シアン、0.5 秒ごとに点滅'],
+      calRec: ['キャリブレーション:記録中', 'シアン点灯'],
+      charging: ['充電中', 'オレンジ、5 秒周期でゆっくり明滅'],
+      charged: ['充電完了', '緑で薄く点灯'],
+      lowBatt: ['電池残量低下', 'オレンジで薄く点滅'],
+      errSensor: ['エラー:センサー', '赤、5 秒ごとに 2 回点滅'],
+      errReceiver: ['エラー:レシーバーが見つからない', '赤、5 秒ごとに 3 回点滅'],
+      errSystem: ['エラー:システム(電池の値が異常など)', '赤、5 秒ごとに 4 回点滅'],
+    },
+    trkBtnTitle: 'トラッカーのボタン',
+    dglBtnTitle: 'Dongle のボタン',
+    btnCols: ['操作', '動作'],
+    trkBtn: [
+      ['1 回押す', '何もしない。doze 中なら起動'],
+      ['素早く 2 回', 'ジャイロのキャリブレーション(静止させる)'],
+      ['素早く 3 回', 'ペアリングモード'],
+      ['素早く 4 回', '有線更新モード(DFU)'],
+      ['長押し', '電源オフ(ボタンを離してから)'],
+    ],
+    dglBtn: [
+      ['1 回押す', '起動中のトラッカーがあれば全部 doze、なければ全部起動'],
+      ['素早く 2 回', 'ペアリングモード終了'],
+      ['素早く 3 回', 'ペアリングモード開始'],
+      ['素早く 4 回', '全トラッカーの電源オフ'],
+      ['5 秒押して離す', 'ペアリングをすべて消去'],
+      ['10 秒押し続ける', '復旧モード(UF2)。.uf2 ファイルをドロップするため'],
+      ['PC に挿すときに 5 秒以上押す', 'ペアリングをすべて消去'],
+    ],
+    btnNote: '標準ファームウェアの設定です。',
+    faqTitle: 'よくある質問',
+    faq: [
+      ['トラッカーがよく切れる、またはスキャンでどのチャンネルも混んでいる', 'Dongle が USB 3.0 のポート・ケーブル・ハブに近すぎる可能性があります。これらは 2.4 GHz 帯全体に干渉します。USB 2.0 ポートに挿すか、延長ケーブルで 30 cm 以上離してください。'],
+      ['一覧に「doze 中または電源オフ」と出る', 'Dongle のボタンを 1 回押すか、「管理」の「すべて起動」を押します。それでも反応しなければ電源オフです。トラッカーのボタンで電源を入れてください。'],
+      ['ワイヤレス更新であるトラッカーを選べない', '電池が 20% 未満(充電ケーブルを挿せば選べます)、doze 中(「起動して再確認」)、または機種がファームウェアと合っていない可能性があります。'],
+      ['更新に失敗した', '転送が途中で止まってもトラッカーは壊れません。元のファームウェアが残っているので、Dongle に近づけてもう一度お試しください。'],
+      ['更新後に Dongle が動かない', '「更新」ページ下の「Dongle の復旧」を使います。Dongle のボタンを 10 秒押し、現れたドライブに .uf2 をドラッグ&ドロップします。'],
+      ['チャンネル変更についてこないトラッカーがある', '4 つの合流チャンネル(76、2、24、50)なら約 30 秒以内に自分で戻ってきます。電源オフだったものも電源を入れた後に戻ります。'],
+      ['どのブラウザが使えますか', 'パソコン版の Chrome または Edge です。スマートフォン、Safari、Firefox には対応していません。'],
+    ],
+  },
+};
+
+function keyframes(name, item){
+  if (item.breathe){
+    return `@keyframes ${name}{0%,100%{opacity:.08}50%{opacity:1}}`;
+  }
+  const total = item.seq.reduce((a, [, ms]) => a + ms, 0);
+  let at = 0, frames = '';
+  for (const [lvl, ms] of item.seq){
+    frames += `${(at / total * 100).toFixed(3)}%{opacity:${Math.max(0.06, lvl)}}`;
+    at += ms;
+  }
+  frames += `100%{opacity:${Math.max(0.06, item.seq.at(-1)[0])}}`;
+  return `@keyframes ${name}{${frames}}`;
+}
+
+function duration(item){
+  return item.breathe || item.seq.reduce((a, [, ms]) => a + ms, 0);
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+export function renderHelp(root, lang){
+  const T = TEXT[lang] || TEXT.en;
+  let css = '';
+  const rows = LED.map((item, i) => {
+    const name = 'led' + i;
+    css += keyframes(name, item);
+    const timing = item.breathe ? 'ease-in-out' : 'step-end';
+    const dot = item.c
+      ? `<span class="ledDot" style="background:${item.c};box-shadow:0 0 0 1px var(--border);animation:${name} ${duration(item)}ms ${timing} infinite"></span>`
+      : '<span class="ledDot"></span>';
+    const [state, light] = T.led[item.k];
+    return `<tr><td>${esc(state)}</td><td>${esc(light)}</td><td>${dot}</td></tr>`;
+  }).join('');
+  const table = (cols, body) =>
+    `<table class="help"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
+  const pairs = list => list.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>`).join('');
+
+  root.innerHTML =
+    `<style>${css}</style>` +
+    `<section class="card"><div class="stepHead"><h2>${esc(T.ledTitle)}</h2></div>` +
+    `<p class="desc">${esc(T.ledDesc)}</p>${table(T.cols, rows)}</section>` +
+    `<section class="card"><div class="stepHead"><h2>${esc(T.trkBtnTitle)}</h2></div>${table(T.btnCols, pairs(T.trkBtn))}` +
+    `<div class="stepHead" style="margin-top:18px"><h2>${esc(T.dglBtnTitle)}</h2></div>${table(T.btnCols, pairs(T.dglBtn))}` +
+    `<p class="desc" style="margin-top:10px">${esc(T.btnNote)}</p></section>` +
+    `<section class="card"><div class="stepHead"><h2>${esc(T.faqTitle)}</h2></div><dl class="faq">` +
+    T.faq.map(([q, a]) => `<dt>${esc(q)}</dt><dd>${esc(a)}</dd>`).join('') +
+    `</dl></section>`;
+}
+
+export const HELP_LANGS = Object.keys(TEXT);
+export const HELP_LED_KEYS = LED.map(l => l.k);
+export const HELP_TEXT = TEXT;

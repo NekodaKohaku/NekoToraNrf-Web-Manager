@@ -19,6 +19,7 @@
  *    the air once no matter how many targets there are.
  */
 import { mkErr, log, sleep, crc32 } from './util.js';
+import { TELEMETRY_TYPES, applyTelemetry } from './telemetry.js';
 
 /* ---- HID report types (src/esb_ota.h) ---- */
 export const HID = {
@@ -37,10 +38,30 @@ export const HID = {
  * same packet layouts; the dongle just keeps these instead of relaying them. */
 export const DONGLE_ID = 0xFE;
 
-/* Dongle-local command envelope (src/rcv_hid_cmd.h). Only the one command the
- * page needs: reboot into the UF2 bootloader, the drag-and-drop recovery path. */
+/* Dongle command envelope (receiver src/rcv_hid_cmd.h).
+ *
+ *   OUT  [0] 254  [1] seq  [2] opcode  [3] flags  [4..15] args
+ *   IN   [0] 251  [1] seq  [2] opcode  [3] status [4..]   result
+ *
+ * Opcodes 1-200 are tracker remote commands (the ESB PONG flag values, args[0]
+ * = tracker id or 0xFF for all); 201-253 act on the dongle itself. A tracker
+ * command answers STARTED at once and a second ACK with the same seq when the
+ * trackers have confirmed it (OK) or the dongle gave up waiting (ENOENT). */
 const RCV_HID_TYPE_CMD = 254;
+const RCV_HID_TYPE_ACK = 251;
 const RCV_HID_OP_DFU   = 217;
+
+export const OP = {
+  // tracker remote (ESB_PONG_FLAG_*)
+  DOZE: 0x70, WAKE: 0x71, PING: 0x11,
+  // dongle
+  PAIR: 201, EXIT_PAIR: 202, DFU: RCV_HID_OP_DFU, TRACKER_CH_ALL: 218, TRACKER_CH_CLR: 219,
+};
+export const ALL_TRACKERS = 0xFF;
+
+export const ACK = {
+  OK: 0, EINVAL: 1, ENOSPC: 2, EBUSY: 3, ENOENT: 4, ENOTSUP: 5, QUEUED: 6, STARTED: 7,
+};
 
 /* ---- OTA status codes ---- */
 export const ST = {
@@ -89,7 +110,9 @@ export class Dongle {
     this.device = device;
     this.queue = [];              // pending OTA sub-reports (16 bytes each)
     this.waiters = [];            // resolvers waiting on new traffic
-    this.seen = new Map();        // trackerId -> {addr, online}
+    this.seen = new Map();        // trackerId -> {addr, online, lastSeen, battery, rssi, fw}
+    this.acks = [];               // command ACKs not yet claimed
+    this.seq = 0;
     this._onInput = this._onInput.bind(this);
   }
 
@@ -118,12 +141,17 @@ export class Dongle {
         this.queue.push(sub);
         continue;
       }
+      if (type === RCV_HID_TYPE_ACK){
+        this.acks.push({ seq: sub[1], opcode: sub[2], status: sub[3], data: sub.slice(4) });
+        continue;
+      }
       /* Presence tracking. Type 255 is the address-registration padding the
        * dongle emits for every tracker it knows about, including ones that are
-       * asleep or out of range; any other non-zero type below 0xF0 is real
-       * telemetry, which only an awake tracker produces. The distinction
-       * matters because an update sent to a registered-but-offline tracker just
-       * times out. */
+       * asleep or out of range; types 0-7 are real telemetry, which only an
+       * awake tracker produces. The distinction matters because an update sent
+       * to a registered-but-offline tracker just times out. Anything else on
+       * the report (ACKs above, tracker events) says nothing about presence -
+       * an ACK's second byte is a sequence number, not a tracker id. */
       if (tid >= 64) continue;
       if (type === 255){
         let addr = '';
@@ -131,9 +159,9 @@ export class Dongle {
         const e = this.seen.get(tid) || { addr: '', online: false };
         e.addr = addr;
         this.seen.set(tid, e);
-      } else if (type !== 0){
+      } else if (TELEMETRY_TYPES.has(type)){
         const e = this.seen.get(tid) || { addr: '', online: false };
-        e.online = true;
+        applyTelemetry(e, sub, Date.now());
         this.seen.set(tid, e);
       }
     }
@@ -193,6 +221,37 @@ export class Dongle {
      * which the tracker places itself. */
     if (flashBase > 0) dv.setUint16(61, flashBase >>> 12, false);
     return this.send(p);
+  }
+
+  /* Send a dongle command and wait for its ACK.
+   *
+   * Returns the first ACK. With `final`, a STARTED answer is followed up to
+   * `finalMs` for the completion ACK (same seq), returned as .final; missing
+   * it is not an error - the command went out, the dongle just stopped
+   * waiting for every tracker to confirm. Resolves null if nothing answers. */
+  async command(op, args = [], { timeoutMs = 1500, final = false, finalMs = 7000 } = {}){
+    this.seq = this.seq >= 250 || this.seq < 128 ? 128 : this.seq + 1;   // clear of enterUf2's 0x55
+    const seq = this.seq;
+    const p = new Uint8Array(REPORT_SIZE);
+    p[0] = RCV_HID_TYPE_CMD; p[1] = seq; p[2] = op; p[3] = 0;
+    p.set(args.slice(0, 12), 4);
+    this.acks = this.acks.filter(a => a.seq !== seq);
+    await this.send(p);
+    const take = () => {
+      const i = this.acks.findIndex(a => a.seq === seq && a.opcode === op);
+      return i < 0 ? null : this.acks.splice(i, 1)[0];
+    };
+    const wait = async ms => {
+      const end = Date.now() + ms;
+      for (;;){
+        const a = take();
+        if (a || Date.now() >= end) return a;
+        await this._traffic(Math.min(100, end - Date.now()));
+      }
+    };
+    const first = await wait(timeoutMs);
+    if (first && final && first.status === ACK.STARTED) first.final = await wait(finalMs);
+    return first;
   }
 
   /* Reboot the dongle into its UF2 bootloader (args[0] = 0: UF2, not OTA DFU).

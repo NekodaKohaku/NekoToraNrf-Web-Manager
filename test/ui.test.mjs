@@ -76,7 +76,9 @@ check('update step gated', $('card4').classList.contains('disabled'));
 const panes = () => ['paneOta', 'paneDfu', 'paneSwd'].filter(p => !$(p).classList.contains('hidden'));
 check('one connect pane visible', panes().length === 1, panes().join(','));
 check('wireless pane is the default', panes()[0] === 'paneOta', panes()[0]);
-check('wireless wants .update.bin', $('fileInput').getAttribute('accept') === '.bin',
+/* The picker takes any firmware file; what it is for is read from its
+ * content (image.test.mjs), not trusted from the extension. */
+check('picker accepts tracker and dongle files', $('fileInput').getAttribute('accept') === '.bin,.hex,.ihex,.uf2',
       $('fileInput').getAttribute('accept'));
 check('SWD options hidden for wireless', $('swdOpts').classList.contains('hidden'));
 check('hold-button warning hidden for wireless', $('holdBox').classList.contains('hidden'));
@@ -84,8 +86,7 @@ check('hold-button warning hidden for wireless', $('holdBox').classList.contains
 [...$('methods').children][2].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 await new Promise(r => setTimeout(r, 120));
 check('clicking SWD swaps pane', panes()[0] === 'paneSwd', panes().join(','));
-check('SWD wants .hex', $('fileInput').getAttribute('accept') === '.hex,.ihex',
-      $('fileInput').getAttribute('accept'));
+check('SWD shows the firmware card', !$('card3').classList.contains('hidden'));
 check('SWD options shown', !$('swdOpts').classList.contains('hidden'));
 check('hold-button warning shown for SWD', !$('holdBox').classList.contains('hidden'));
 check('method choice persisted', window.localStorage.getItem('method') === 'swd');

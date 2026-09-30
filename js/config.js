@@ -83,3 +83,13 @@ export const OTA_SEQUENTIAL = true;
  * value on the nRF - where 921600 needs a fractional divisor on both.
  */
 export const DFU_BAUD = 1000000;
+
+/* Trackers below this charge are not offered for a wireless update unless
+ * they are charging (or run without a battery).
+ *
+ * An interrupted transfer is harmless - the old image stays in place - but the
+ * copy the bootloader makes after the reboot is not, and its flash erase draws
+ * a current spike a weak cell may not hold up under. Battery percentage is
+ * also least accurate near empty. 20 is a conservative guess, not a measured
+ * figure; revisit once an update's consumption has been measured. */
+export const MIN_OTA_BATTERY_PCT = 20;

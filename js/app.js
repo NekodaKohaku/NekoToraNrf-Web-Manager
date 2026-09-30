@@ -10,14 +10,18 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG, DFU_BAUD } from './config.js';
+import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb, sleep } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
-import { parseUpdateBin, looksLikeUpdateBin, parseAppHex } from './image.js';
+import { parseUpdateBin, parseAppHex, classifyFirmwareFile } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
-import { Dongle, OtaClient, DONGLE_ID } from './ota.js';
+import { Dongle, OtaClient, DONGLE_ID, OP, ALL_TRACKERS } from './ota.js';
+import { batteryBlocks, isAwake } from './telemetry.js';
+import { createManage } from './manage.js';
+import { renderHelp } from './help.js';
+import { buildReport } from './diag.js';
 import { SmpPort, enterRecovery, uploadImage } from './smp.js';
 import * as reg from './registry.js';
 
@@ -48,7 +52,10 @@ const state = {
   method: 'ota',
   device: null,          // registry entry
   manifest: null,
-  manualFw: null,        // {kind, name, ...} when the user overrode the file
+  manualFw: null,        // {kind, name, ...} when the user overrode the tracker file
+  manualDongle: null,    // app image the user picked for the dongle
+  page: 'home',
+  updating: false,       // a firmware update is running (scans do not count)
   busy: false,
 
   // SWD
@@ -156,6 +163,29 @@ function renderMethods(){
   }
 }
 
+/* The wireless flow is two steps: pick devices, update. The firmware is
+ * chosen automatically and summarised in the device card, so its own card is
+ * only shown for wired and SWD, where there is exactly one image to show. */
+function renderSteps(){
+  const ota = state.method === 'ota';
+  $('card3').classList.toggle('hidden', ota);
+  $('stepNum2').textContent = '1';
+  $('stepNum3').textContent = '2';
+  $('stepNum4').textContent = ota ? '2' : '3';
+  const tv = state.manualFw ? t('manualTracker', { name: state.manualFw.name })
+           : state.manifest ? state.manifest.version : '…';
+  const dv = state.manualDongle ? t('manualDongle', { name: state.manualDongle.name })
+           : state.dongleManifest ? state.dongleManifest.version : '-';
+  $('otaFwLine').textContent = t('otaFwLatest', { t: tv, d: dv });
+}
+
+function renderChip(){
+  const chip = $('dongleChip');
+  chip.textContent = state.dongle ? t('chipOk') : t('chipNone');
+  chip.classList.toggle('ok', !!state.dongle);
+  $('btnTopConnect').classList.toggle('hidden', !!state.dongle);
+}
+
 function renderConnect(){
   const m = M();
   $('connTitle').textContent = t(m.connTitle);
@@ -172,6 +202,7 @@ function renderConnect(){
     st.textContent = state.dongle ? t('otaDongleOk', { name: state.dongle.name }) : t('otaDongleNone');
     if (state.dongle) st.classList.add('ok');
     $('btnRescan').classList.toggle('hidden', !state.dongle);
+    $('btnConnectDongle').classList.toggle('hidden', !!state.dongle);
     $('otaPick').classList.toggle('hidden', !state.dongle);
   } else {
     st.textContent = state.port ? t('dfuPortOk') : t('dfuPortNone');
@@ -194,6 +225,16 @@ function dongleVerdict(){
   if (state.dongleQuerying) return { eligible: false, info: t('otaQuerying'), badge: '…' };
   if (!info) return { eligible: false, info: t('dongleNoInfo'), badge: '?' };
   const ver = info.version + ' · ' + info.bootloader;
+  /* A file the user picked is the user's call on version: offer it whatever
+   * the dongle runs. The bootloader check still applies - without the UF2
+   * bootloader there is nothing to copy the image in. */
+  if (state.manualDongle){
+    if (info.bootloader !== 'adafruit_uf2'){
+      return { eligible: false, info: ver, badge: t('dongleUnsupported'), cls: 'warn' };
+    }
+    return { eligible: true, outdated: true, info: ver,
+             badge: t('manualDongle', { name: state.manualDongle.name }), cls: 'upd' };
+  }
   if (!m) return { eligible: false, info: ver, badge: t('dongleNoFw') };
   if (info.bootloader !== 'adafruit_uf2'){
     return { eligible: false, info: ver, badge: t('dongleUnsupported'), cls: 'warn' };
@@ -248,9 +289,13 @@ function renderTrackers(){
   list.innerHTML = '';
   const want = state.manifest && state.manifest.boardTarget;
 
+  let asleep = 0;
   for (const [id, tk] of state.trackers){
     const row = document.createElement('div');
     row.className = 'trk';
+    const live = liveOf(id);
+    if (!tk.online) asleep++;
+    const lowBatt = trackerBatteryBlock(id);
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
@@ -261,10 +306,11 @@ function renderTrackers(){
      * with a mismatched target comes back BOARD_MISMATCH and nothing is
      * written - so this is about not offering an action that cannot work,
      * rather than about safety. */
-    const eligible = tk.online && tk.info &&
+    const eligible = tk.online && tk.info && !lowBatt &&
                      (!want || tk.info.boardTarget === want);
     cb.disabled = !eligible;
-    if (!eligible) row.classList.add('dim');
+    /* A low battery is something to act on, so its row stays readable. */
+    if (!eligible && !lowBatt) row.classList.add('dim');
     cb.onchange = () => {
       if (cb.checked) state.selected.add(id); else state.selected.delete(id);
       renderSelCount(); gate();
@@ -282,7 +328,11 @@ function renderTrackers(){
 
     if (!tk.online){
       info.textContent = tk.addr ? tk.addr : '';
-      badge.textContent = t('otaOffline');
+      badge.textContent = t('stAsleep');
+    } else if (lowBatt){
+      info.textContent = tk.info ? tk.info.version : '';
+      badge.textContent = t('battLow', { pct: lowBatt.pct });
+      badge.classList.add('warn');
     } else if (tk.querying){
       info.textContent = t('otaQuerying');
       badge.textContent = '…';
@@ -294,8 +344,8 @@ function renderTrackers(){
       badge.textContent = t('otaMismatch', { board: tk.info.boardTarget || '?' });
       badge.classList.add('warn');
     } else {
-      const latest = state.manifest ? state.manifest.versionCode : null;
-      info.textContent = tk.info.version + ' · ' + tk.info.bootloader;
+      const latest = state.manualFw ? null : state.manifest ? state.manifest.versionCode : null;
+      info.textContent = [tk.info.version + ' · ' + tk.info.bootloader, ...liveBits(live)].join(' · ');
       if (latest !== null && tk.info.versionCode >= latest){
         badge.textContent = t('otaUpToDate');
         badge.classList.add('ok');
@@ -311,7 +361,31 @@ function renderTrackers(){
     row.append(cb, name, info, badge);
     list.appendChild(row);
   }
+  /* Registered but silent: dozing or off. Offer to wake them rather than
+   * waking them unasked - someone may have dozed them on purpose. */
+  const wake = !state.busy && asleep > 0 && state.method === 'ota';
+  $('wakeBox').classList.toggle('hidden', !wake);
+  if (wake) $('wakeText').textContent = t('wakeText', { n: asleep });
   renderSelCount();
+}
+
+function liveOf(id){
+  return state.dongle ? state.dongle.seen.get(id) : null;
+}
+
+function liveBits(live){
+  const bits = [];
+  if (!live || !isAwake(live)) return bits;
+  if (live.battery && live.battery.present){
+    bits.push(live.battery.charging ? t('battCharging') : t('battPct', { pct: live.battery.pct }));
+  }
+  if (live.rssi !== undefined) bits.push(live.rssi + ' dBm');
+  return bits;
+}
+
+function trackerBatteryBlock(id){
+  const live = liveOf(id);
+  return live ? batteryBlocks(live.battery, MIN_OTA_BATTERY_PCT) : null;
 }
 
 function renderSelCount(){
@@ -344,7 +418,7 @@ function renderFirmware(){
   badge.classList.remove('ok');
 
   $('manualNeeds').textContent = t(M().needs === 'bin' ? 'needBin' : 'needHex');
-  $('fileInput').setAttribute('accept', M().accept);
+  $('fileInput').setAttribute('accept', '.bin,.hex,.ihex,.uf2');
 
   if (manual){
     $('fwLine').textContent = t('fwManualOn');
@@ -376,10 +450,16 @@ function connected(){
 function readyToStart(){
   if (!connected()) return false;
   if (!state.manifest && !state.manualFw && !(state.method === 'ota' && state.dongleSelected)) return false;
-  if (state.method === 'ota' && !state.selected.size && !state.dongleSelected) return false;
+  if (state.method === 'ota' && !otaTargets().length && !state.dongleSelected) return false;
   if (state.method === 'dfu' && !state.inRecovery) return false;
   return true;
 }
+/* Selected trackers still fit to update. Battery is re-checked here because
+ * it keeps changing after the list was drawn. */
+function otaTargets(){
+  return [...state.selected].filter(id => !trackerBatteryBlock(id)).sort((a, b) => a - b);
+}
+
 function gate(){
   $('card2').classList.toggle('disabled', state.busy);
   $('card3').classList.toggle('disabled', !connected() || state.busy);
@@ -410,6 +490,7 @@ function showView(v){
 }
 
 function refresh(){
+  renderChip(); renderSteps();
   renderMethods(); renderConnect(); renderFirmware();
   if (state.method === 'ota') renderTrackers();
   renderRescue();
@@ -425,19 +506,25 @@ async function selectMethod(id){
   /* Connections do not carry across methods - a CMSIS-DAP probe is not a
    * dongle - so drop whatever is open rather than leaving a stale handle that
    * looks connected in the UI. */
-  await dropConnections();
+  await dropConnections({ keepDongle: true });
   state.manualFw = null;
+  $('uf2Box').classList.add('hidden');
   showView('pre');
   refresh();
 }
 
-async function dropConnections(){
-  if (state.dongle){ await state.dongle.close().catch(() => {}); state.dongle = null; state.ota = null; }
+/* The dongle is shared by every page, so switching update method keeps it;
+ * probes and serial ports belong to one method and are dropped. */
+async function dropConnections({ keepDongle = false } = {}){
+  if (state.dongle && !keepDongle){ await state.dongle.close().catch(() => {}); state.dongle = null; state.ota = null; }
   if (state.smp){ await state.smp.close().catch(() => {}); state.smp = null; }
   state.port = null;
   if (state.tr){ try { await state.tr.close(); } catch (_) {} state.tr = null; state.dap = null; }
-  state.trackers.clear(); state.selected.clear(); state.inRecovery = false;
-  state.dongleInfo = null; state.dongleSelected = false;
+  state.inRecovery = false;
+  if (!keepDongle){
+    state.trackers.clear(); state.selected.clear();
+    state.dongleInfo = null; state.dongleSelected = false;
+  }
   /* Whatever identified itself is gone, so the banner saying so has to go too. */
   $('devDetected').classList.add('hidden');
   $('connErr').classList.add('hidden');
@@ -563,6 +650,7 @@ async function connectDongle(){
     log('dongle: ' + d.name);
     await loadManifestFor(match, { detected: true });
     refresh();
+    if (state.page === 'manage') manage.render(true);
     await scanTrackers();
   } catch (e){ connFail(e); }
 }
@@ -611,7 +699,7 @@ async function scanTrackers(){
       catch (_) { tk.info = null; }
       tk.querying = false;
       const want = state.manifest && state.manifest.boardTarget;
-      if (tk.info && (!want || tk.info.boardTarget === want) &&
+      if (tk.info && (!want || tk.info.boardTarget === want) && !trackerBatteryBlock(id) &&
           state.manifest && tk.info.versionCode < state.manifest.versionCode){
         outdated.push(id);
       }
@@ -685,6 +773,7 @@ function connFail(e){
 async function start(){
   if (!readyToStart() || state.busy) return;
   state.busy = true;
+  state.updating = true;
   gate();
   showView('progress');
   setBar(0);
@@ -708,6 +797,7 @@ async function start(){
     showView('bad');
   } finally {
     state.busy = false;
+    state.updating = false;
     gate();
   }
 }
@@ -717,7 +807,10 @@ async function start(){
 const DONGLE_ROW = 255;
 
 async function runOta(){
-  const ids = [...state.selected].sort((a, b) => a - b);
+  const ids = otaTargets();
+  for (const id of state.selected){
+    if (!ids.includes(id)) log(`tracker ${id}: skipped, battery below ${MIN_OTA_BATTERY_PCT}%`, 'warn');
+  }
   const doDongle = state.dongleSelected;
   const board = (state.manifest && state.manifest.boardTarget) || '';
   const fw = ids.length ? await resolveImage() : null;
@@ -852,14 +945,19 @@ async function runOta(){
  */
 async function runDongleUpdate(onEvent){
   const m = state.dongleManifest;
-  if (!m || !m.hex) throw mkErr('fwLoadFailed', { err: 'no dongle firmware' });
-  const got = await reg.fetchImage(m, 'hex');
-  const img = parseAppHex(got.text, got.name);
+  const manual = state.manualDongle;
+  let img;
+  if (manual) img = manual;
+  else {
+    if (!m || !m.hex) throw mkErr('fwLoadFailed', { err: 'no dongle firmware' });
+    const got = await reg.fetchImage(m, 'hex');
+    img = parseAppHex(got.text, got.name);
+  }
   const old = state.dongle.device;
 
   state.dongleRebooting = true;
   try {
-    await state.ota.updateDongle(img, m.boardTarget || '', onEvent);
+    await state.ota.updateDongle(img, (m && m.boardTarget) || '', onEvent);
     onEvent({ stage: 'reconnect' });
     const dev = await waitDongleBack(old);
     /* The old handle points at a device that no longer exists; drop its
@@ -877,10 +975,12 @@ async function runDongleUpdate(onEvent){
     await sleep(500);
     const info = await state.ota.queryInfo(DONGLE_ID, 4000);
     state.dongleInfo = info;
-    if (!info || info.versionCode !== m.versionCode){
+    /* A manual image carries no version to compare against; it went
+     * through if the dongle came back at all and answers. */
+    if (!info || (!manual && info.versionCode !== m.versionCode)){
       /* The bootloader rejected the copy and the old application is still
        * running, or something else answered. Either way it is not updated. */
-      throw mkErr('errDongleVersion', { got: info ? info.version : '?', want: m.version });
+      throw mkErr('errDongleVersion', { got: info ? info.version : '?', want: m ? m.version : '?' });
     }
     return { reconnected: true, version: info.version };
   } finally {
@@ -969,21 +1069,106 @@ async function runSwd(fw){
 
 async function loadManualFile(file){
   $('fwErr').classList.add('hidden');
+  $('uf2Box').classList.add('hidden');
   try {
-    if (M().needs === 'bin'){
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!looksLikeUpdateBin(bytes)) throw mkErr('errWrongFormat', { want: '.update.bin' });
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = classifyFirmwareFile(bytes);
+    log(`manual file: ${file.name} (${kind})`);
+    if (kind === 'uf2'){
+      /* Not an error: the file is fine, it just is not something the page
+       * can write. Show the drag-and-drop route instead. */
+      $('uf2Box').classList.remove('hidden');
+      $('btnUf2').classList.toggle('hidden', !state.dongle);
+      $('card3').classList.remove('hidden');
+    } else if (kind === 'trackerBin'){
+      if (state.method === 'swd') throw mkErr('errFileNotSwd');
       state.manualFw = parseUpdateBin(bytes, file.name);
+    } else if (kind === 'trackerHex'){
+      if (state.method !== 'swd') throw mkErr('errFileSwdOnly');
+      state.manualFw = buildHexFw(new TextDecoder().decode(bytes), file.name);
+    } else if (kind === 'dongleHex'){
+      if (state.method !== 'ota') throw mkErr('errFileDongleOta');
+      state.manualDongle = parseAppHex(new TextDecoder().decode(bytes), file.name);
+      const v = dongleVerdict();
+      state.dongleSelected = !!v.eligible;
     } else {
-      state.manualFw = buildHexFw(await file.text(), file.name);
+      throw mkErr('errFileUnknown');
     }
-    log('manual firmware: ' + file.name);
   } catch (e){
-    state.manualFw = null;
     $('fwErr').textContent = errText(e);
     $('fwErr').classList.remove('hidden');
+    $('card3').classList.remove('hidden');
   }
-  renderFirmware(); gate();
+  refresh();
+  if (!$('fwErr').classList.contains('hidden') || !$('uf2Box').classList.contains('hidden')){
+    $('card3').classList.remove('hidden');
+  }
+}
+
+/* ============================== pages ================================ */
+
+const PAGES = ['home', 'update', 'manage', 'help', 'diag'];
+let manage = null;
+
+function showPage(name){
+  if (!PAGES.includes(name)) name = 'home';
+  state.page = name;
+  for (const p of PAGES){
+    $('page' + p[0].toUpperCase() + p.slice(1)).classList.toggle('hidden', p !== name);
+  }
+  for (const b of document.querySelectorAll('#nav button')){
+    if (b.dataset.page === name) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  }
+  if (name === 'manage') manage.show(); else manage.hide();
+  if (name === 'help') renderHelp($('helpBody'), getLang());
+  if (name === 'update') refresh();
+}
+
+function go(name){
+  if (location.hash !== '#' + name) location.hash = name;
+  else showPage(name);
+}
+
+/* Confirmation as a plain overlay: resolves true on OK, false otherwise. */
+function confirmBox(title, text){
+  return new Promise(resolve => {
+    $('confirmTitle').textContent = title;
+    $('confirmText').textContent = text;
+    $('confirmOverlay').classList.remove('hidden');
+    const done = v => {
+      $('confirmOverlay').classList.add('hidden');
+      $('btnConfirmYes').onclick = $('btnConfirmNo').onclick = null;
+      resolve(v);
+    };
+    $('btnConfirmYes').onclick = () => done(true);
+    $('btnConfirmNo').onclick = () => done(false);
+  });
+}
+
+async function wakeAndRescan(){
+  if (!state.dongle || state.busy) return;
+  $('otaNote').textContent = t('wakeSent');
+  $('otaNote').classList.remove('hidden');
+  $('wakeBox').classList.add('hidden');
+  try {
+    await state.dongle.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+  } catch (e){ log('wake failed: ' + errText(e), 'warn'); }
+  /* A woken tracker needs a moment before it streams again. */
+  await sleep(2500);
+  await scanTrackers();
+}
+
+let lastReport = '';
+function makeReport(){
+  lastReport = buildReport({
+    lang: getLang(), dongle: state.dongle, dongleInfo: state.dongleInfo,
+    dongleManifest: state.dongleManifest, manifest: state.manifest, trackers: state.trackers,
+  });
+  $('diagOut').textContent = lastReport;
+  $('diagOut').classList.remove('hidden');
+  $('btnDiagDl').disabled = false;
+  $('btnDiagCopy').disabled = false;
 }
 
 /* ============================== init ================================= */
@@ -1017,7 +1202,47 @@ async function init(){
    * the time the user gets there. */
   if (reg.devices().length === 1) await loadManifestFor(reg.devices()[0]);
 
-  $('langSel').onchange = e => { applyLang(e.target.value); refresh(); };
+  $('langSel').onchange = e => {
+    applyLang(e.target.value); refresh();
+    if (state.page === 'help') renderHelp($('helpBody'), getLang());
+    if (state.page === 'manage') manage.render(true);
+  };
+
+  manage = createManage({
+    dongle: () => state.dongle,
+    connect: () => connectDongle(),
+    confirm: confirmBox,
+    /* Only a running update blocks commands: a scan just listens, while an
+     * update owns the radio link and must not be interleaved with. */
+    busy: () => state.updating,
+  });
+  manage.bind();
+  for (const b of document.querySelectorAll('#nav button')) b.onclick = () => go(b.dataset.page);
+  for (const b of document.querySelectorAll('.homeCard')) b.onclick = () => go(b.dataset.go);
+  window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
+  $('btnTopConnect').onclick = connectDongle;
+  $('btnWakeScan').onclick = () => wakeAndRescan().catch(e => connFail(e));
+  $('btnUf2').onclick = async () => {
+    if (!state.dongle) return;
+    try {
+      await state.dongle.enterUf2();
+      log('dongle: asked to reboot into the UF2 bootloader');
+      $('btnUf2').textContent = t('uf2Sent');
+    } catch (e){ connFail(e); }
+  };
+  $('btnDiagMake').onclick = makeReport;
+  $('btnDiagDl').onclick = () => {
+    const blob = new Blob([lastReport], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'nekotora-diagnostics.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  $('btnDiagCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(lastReport); $('btnDiagCopy').textContent = t('diagCopied'); }
+    catch (_) { /* clipboard refused: the text is on screen to select */ }
+  };
 
   $('btnConnect').onclick = connectUsb;
   $('btnConnectHid').onclick = connectProbeHid;
@@ -1045,7 +1270,12 @@ async function init(){
   $('btnStart').onclick = start;
   $('btnRetry').onclick = () => { showView('pre'); gate(); };
   $('btnAgain').onclick = () => { showView('pre'); gate(); };
-  $('btnUseAuto').onclick = () => { state.manualFw = null; renderFirmware(); gate(); };
+  $('btnUseAuto').onclick = () => {
+    state.manualFw = null; state.manualDongle = null;
+    const v = dongleVerdict();
+    state.dongleSelected = !!(v.eligible && v.outdated);
+    refresh();
+  };
 
   $('drop').onclick = () => $('fileInput').click();
   $('fileInput').onchange = e => { if (e.target.files[0]) loadManualFile(e.target.files[0]); };
@@ -1082,6 +1312,7 @@ async function init(){
         $('devDetected').classList.add('hidden');
         log('dongle disconnected', 'warn');
         refresh();
+        if (state.page === 'manage') manage.render(true);
       }
     });
   }
@@ -1094,6 +1325,15 @@ async function init(){
   checkSupport();
   showView('pre');
   refresh();
+  showPage(location.hash.slice(1) || 'home');
+
+  /* Battery and signal keep changing; keep the update list current while it
+   * is on screen and nothing is running. */
+  setInterval(() => {
+    if (state.page === 'update' && state.method === 'ota' && state.dongle && !state.busy && state.trackers.size){
+      renderTrackers(); gate();
+    }
+  }, 2000);
 }
 
 init().catch(e => { log('init failed: ' + errText(e), 'err'); });

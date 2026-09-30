@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Firmware Update Tool</title>
+<title>NekoTora Manager</title>
 <style>
 :root{
   --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b;
@@ -126,33 +126,93 @@ details.adv>summary{cursor:pointer;color:var(--muted);font-size:14px;user-select
 .logBox .err{color:#f87171}
 .logBtns{margin-top:8px;display:flex;gap:10px}
 footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font-size:12px}
+/* ---- manager shell ---- */
+header .topbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.btn.small{padding:7px 14px;font-size:14px}
+nav.tabs{max-width:820px;margin:0 auto;padding:4px 20px 0;display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+nav.tabs button{appearance:none;background:none;border:none;border-bottom:3px solid transparent;padding:9px 12px;font:inherit;font-size:15px;color:var(--muted);cursor:pointer}
+nav.tabs button[aria-current="page"]{color:var(--text);border-bottom-color:var(--primary);font-weight:600}
+.page{padding-top:6px}
+.homeGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:8px}
+@media (max-width:640px){ .homeGrid{grid-template-columns:1fr} }
+.homeCard{text-align:left;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px 20px;cursor:pointer;font:inherit;color:inherit;transition:border-color .15s}
+.homeCard:hover{border-color:var(--primary)}
+.homeCard .hcT{font-weight:700;font-size:17px}
+.homeCard .hcD{color:var(--muted);font-size:14px;margin-top:4px}
+.noteBox{background:var(--sel-bg);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin:10px 0;font-size:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.noteBox ol{margin:6px 0 0;padding-left:20px;flex-basis:100%}
+#uf2Box{display:block}
+.trk .tBtn{flex:none}
+.tState.warn{background:var(--warn-bg);color:var(--warn)}
+.chCards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px}
+@media (max-width:640px){ .chCards{grid-template-columns:repeat(2,1fr)} }
+.chCard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.chCard .chN{font-weight:700;font-size:17px}
+.chCard .chF{color:var(--muted);font-size:13px}
+.consoleIn{flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
+.overlayBox{background:var(--card);color:var(--text);border-radius:16px;padding:20px 22px;max-width:440px;width:100%;border:1px solid var(--border)}
+.overlayBox h3{margin:0 0 8px;font-size:18px}
+#diagOut{height:auto;max-height:360px;white-space:pre-wrap}
+table.help{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
+table.help th,table.help td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);vertical-align:top}
+table.help th{color:var(--muted);font-weight:600;font-size:13px}
+.ledDot{display:inline-block;width:14px;height:14px;border-radius:50%;background:var(--border);vertical-align:middle}
+.faq dt{font-weight:600;margin-top:12px}
+.faq dd{margin:4px 0 0;color:var(--muted);font-size:14px}
+/* Narrow screens: a device row wraps, details drop under the name so the
+   status badge is never cut off at the edge. */
+@media (max-width:640px){
+  .trk{flex-wrap:wrap;row-gap:4px}
+  .trk .tState{margin-left:auto}
+  .trk .tInfo{order:5;flex-basis:100%;padding-left:28px}
+  .trk .tBtn{order:4}
+}
 </style>
 </head>
 <body>
 <header>
   <div>
-    <h1 data-i18n="title">Firmware Update Tool</h1>
+    <h1 data-i18n="title">NekoTora Manager</h1>
     <p class="sub" data-i18n="subtitle"></p>
   </div>
-  <select id="langSel" aria-label="Language">
-    <option value="zh">繁體中文</option>
-    <option value="en">English</option>
-    <option value="ja">日本語</option>
-  </select>
+  <div class="topbar">
+    <span id="dongleChip" class="badge"></span>
+    <button id="btnTopConnect" class="btn primary small" data-i18n="topConnect"></button>
+    <select id="langSel" aria-label="Language">
+      <option value="zh">繁體中文</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+    </select>
+  </div>
 </header>
+<nav class="tabs" id="nav">
+  <button data-page="home" data-i18n="navHome"></button>
+  <button data-page="update" data-i18n="navUpdate"></button>
+  <button data-page="manage" data-i18n="navManage"></button>
+  <button data-page="help" data-i18n="navHelp"></button>
+  <button data-page="diag" data-i18n="navDiag"></button>
+</nav>
+
 <main>
-  <div id="unsupported" class="banner hidden"></div>
+<div id="unsupported" class="banner hidden"></div>
 
-  <!-- Step 1: how to update -->
-  <section class="card" id="card1">
-    <div class="stepHead"><span class="stepNum">1</span><h2 data-i18n="step0Title"></h2></div>
-    <p class="desc" data-i18n="step0Desc"></p>
-    <div class="methods" id="methods" role="tablist"></div>
-  </section>
+<!-- ============================ home ============================= -->
+<section class="page" id="pageHome">
+  <p class="desc" data-i18n="homeIntro"></p>
+  <div class="homeGrid">
+    <button class="homeCard" data-go="update"><div class="hcT" data-i18n="homeUpdateT"></div><div class="hcD" data-i18n="homeUpdateD"></div></button>
+    <button class="homeCard" data-go="manage"><div class="hcT" data-i18n="homeManageT"></div><div class="hcD" data-i18n="homeManageD"></div></button>
+    <button class="homeCard" data-go="help"><div class="hcT" data-i18n="homeHelpT"></div><div class="hcD" data-i18n="homeHelpD"></div></button>
+    <button class="homeCard" data-go="diag"><div class="hcT" data-i18n="homeDiagT"></div><div class="hcD" data-i18n="homeDiagD"></div></button>
+  </div>
+</section>
 
-  <!-- Step 2: connect (body swapped per method) -->
+<!-- =========================== update ============================ -->
+<section class="page hidden" id="pageUpdate">
+<!-- Step 2: connect (body swapped per method) -->
   <section class="card disabled" id="card2">
-    <div class="stepHead"><span class="stepNum">2</span><h2 id="connTitle"></h2><span id="connStatus" class="badge"></span></div>
+    <div class="stepHead"><span class="stepNum" id="stepNum2">1</span><h2 id="connTitle"></h2><span id="connStatus" class="badge"></span></div>
     <p class="desc" id="connDesc"></p>
 
     <!-- wireless -->
@@ -171,6 +231,9 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
         </div>
       </div>
       <p id="otaNote" class="desc hidden"></p>
+      <div id="wakeBox" class="noteBox hidden"><span id="wakeText"></span>
+        <button id="btnWakeScan" class="btn alt small" data-i18n="wakeScan"></button></div>
+      <p id="otaFwLine" class="desc" style="white-space:pre-line"></p>
       <!-- The one path that works when the dongle itself will not: its UF2
            bootloader never changes, so a dongle whose application is broken
            still comes up as a USB drive. Shown whether or not a dongle is
@@ -207,9 +270,10 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
     <p id="devDetected" class="desc hidden" style="font-weight:600;color:var(--ok)"></p>
   </section>
 
-  <!-- Step 3: firmware -->
+  
+<!-- Step 3: firmware -->
   <section class="card disabled" id="card3">
-    <div class="stepHead"><span class="stepNum">3</span><h2 data-i18n="fwAutoTitle"></h2><span id="fwStatus" class="badge"></span></div>
+    <div class="stepHead"><span class="stepNum" id="stepNum3">2</span><h2 data-i18n="fwAutoTitle"></h2><span id="fwStatus" class="badge"></span></div>
     <p class="desc" id="fwLine" style="white-space:pre-line"></p>
     <div class="fileInfo hidden" id="fileInfo">
       <div class="fname" id="fileName"></div>
@@ -217,11 +281,15 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
       <button class="linklike" id="btnUseAuto" data-i18n="useAuto"></button>
     </div>
     <p id="fwErr" class="desc hidden" style="color:var(--err)"></p>
+  <div id="uf2Box" class="noteBox hidden">
+    <div data-i18n="uf2Title" style="font-weight:600"></div>
+    <ol><li data-i18n="uf2Step1"></li><li><span data-i18n="uf2Step2"></span>
+      <button id="btnUf2" class="linklike" data-i18n="uf2Enter"></button></li><li data-i18n="uf2Step3"></li></ol>
+  </div>
   </section>
-
-  <!-- Step 4: update -->
+<!-- Step 4: update -->
   <section class="card disabled" id="card4">
-    <div class="stepHead"><span class="stepNum">4</span><h2 data-i18n="step3Title"></h2></div>
+    <div class="stepHead"><span class="stepNum" id="stepNum4">3</span><h2 data-i18n="step3Title"></h2></div>
     <div id="preUpdate">
       <div class="holdBox hidden" id="holdBox"><span class="ico">⚠️</span><span data-i18n="holdWarn"></span></div>
       <button id="btnStart" class="btn primary big"></button>
@@ -249,7 +317,16 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
     </div>
   </section>
 
-  <!-- Advanced -->
+  
+<!-- Other ways to update: the three methods, wireless first. Kept below
+     the wireless flow; picking wired or SWD swaps the connect card above. -->
+<section class="card" id="card1">
+  <div class="stepHead"><h2 data-i18n="otherTitle"></h2></div>
+  <p class="desc" data-i18n="otherDesc"></p>
+  <div class="methods" id="methods" role="tablist"></div>
+</section>
+
+<!-- Advanced -->
   <details class="adv" id="advanced">
     <summary data-i18n="advanced"></summary>
     <div class="advBody">
@@ -293,9 +370,89 @@ footer{max-width:820px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font
       </div>
     </div>
   </details>
+</section>
+
+<!-- =========================== manage ============================ -->
+<section class="page hidden" id="pageManage">
+  <section class="card" id="manageNeed">
+    <p class="desc" data-i18n="needDongle"></p>
+    <button id="btnManageConnect" class="btn primary" data-i18n="topConnect"></button>
+  </section>
+  <div id="manageBody" class="hidden">
+    <section class="card">
+      <div class="stepHead"><h2 data-i18n="mgTrackersTitle"></h2><span id="mgSummary" class="badge"></span></div>
+      <p class="desc" data-i18n="mgTrackersDesc"></p>
+      <div class="row">
+        <button id="btnDozeAll" class="btn primary" data-i18n="mgDozeAll"></button>
+        <button id="btnWakeAll" class="btn alt" data-i18n="mgWakeAll"></button>
+      </div>
+      <p id="mgMsg" class="desc hidden" style="margin-top:10px"></p>
+      <div class="trackers" id="mgList" style="margin-top:12px"></div>
+    </section>
+    <section class="card">
+      <div class="stepHead"><h2 data-i18n="mgPairTitle"></h2></div>
+      <p class="desc" data-i18n="mgPairDesc"></p>
+      <div class="row">
+        <button id="btnPairOn" class="btn primary" data-i18n="mgPairOn"></button>
+        <button id="btnPairOff" class="btn alt" data-i18n="mgPairOff"></button>
+      </div>
+      <p id="mgPairMsg" class="desc hidden" style="margin-top:10px"></p>
+    </section>
+    <section class="card">
+      <div class="stepHead"><h2 data-i18n="mgChTitle"></h2></div>
+      <p class="desc" data-i18n="mgChDesc"></p>
+      <div class="chCards" id="chCards"></div>
+      <p id="mgChMsg" class="desc hidden" style="margin-top:10px"></p>
+      <p class="desc" data-i18n="mgChNote" style="margin-top:10px"></p>
+    </section>
+    <details class="adv" id="consoleBox">
+      <summary data-i18n="mgConsoleTitle"></summary>
+      <div class="advBody">
+        <p class="desc" data-i18n="mgConsoleDesc"></p>
+        <button id="btnConsoleConnect" class="btn alt" data-i18n="mgConsoleConnect"></button>
+        <div class="logBox" id="consoleOut"></div>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="consoleIn" class="consoleIn" data-i18n-ph="mgConsolePh" disabled>
+          <button id="btnConsoleSend" class="btn primary small" data-i18n="mgConsoleSend" disabled></button>
+        </div>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============================ help ============================= -->
+<section class="page hidden" id="pageHelp">
+  <div id="helpBody"></div>
+</section>
+
+<!-- ======================== diagnostics ========================== -->
+<section class="page hidden" id="pageDiag">
+  <section class="card">
+    <div class="stepHead"><h2 data-i18n="diagTitle"></h2></div>
+    <p class="desc" data-i18n="diagDesc"></p>
+    <div class="row">
+      <button id="btnDiagMake" class="btn primary" data-i18n="diagMake"></button>
+      <button id="btnDiagDl" class="btn alt" data-i18n="diagDownload" disabled></button>
+      <button id="btnDiagCopy" class="btn alt" data-i18n="diagCopy" disabled></button>
+    </div>
+    <pre id="diagOut" class="logBox hidden"></pre>
+  </section>
+</section>
+
+<!-- confirm overlay (a plain element: <dialog> is not available everywhere
+     the page is tested) -->
+<div id="confirmOverlay" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="overlayBox">
+    <h3 id="confirmTitle"></h3>
+    <p id="confirmText" style="white-space:pre-line"></p>
+    <div class="row" style="justify-content:flex-end">
+      <button id="btnConfirmNo" class="btn alt" data-i18n="cancel"></button>
+      <button id="btnConfirmYes" class="btn primary" data-i18n="confirm"></button>
+    </div>
+  </div>
+</div>
 </main>
 <footer><span data-i18n="footerNote"></span></footer>
-
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

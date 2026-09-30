@@ -8,6 +8,7 @@
  * translated addition degrades to English rather than showing the raw key.
  */
 import { CONFIG } from './config.js';
+import { EXTRA } from './i18n_extra.js';
 
 const I18N = {
 
@@ -514,6 +515,11 @@ ja: {
 },
 
 };
+
+for (const l of Object.keys(EXTRA)) Object.assign(I18N[l], EXTRA[l]);
+
+/* Every key in any language, for the missing-translation test. */
+export const I18N_TABLE = I18N;
 
 export const LANGS = ['zh', 'en', 'ja'];
 

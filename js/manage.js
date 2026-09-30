@@ -6,9 +6,9 @@
  * every device - a channel change - asks first.
  */
 import { t } from './i18n.js';
-import { OP, ACK, ALL_TRACKERS } from './ota.js';
-import { isAwake } from './telemetry.js';
-import { log } from './util.js';
+import { OP, ACK, ALL_TRACKERS, LINK } from './ota.js';
+import { isAwake, trackerState } from './telemetry.js';
+import { log, sleep } from './util.js';
 
 /* Rendezvous channels, same order and values as ESB_SEARCH_CHANNELS in both
  * firmware repositories. The first is the default. */
@@ -16,6 +16,25 @@ export const RENDEZVOUS = [76, 2, 24, 50];
 export const DEFAULT_CHANNEL = RENDEZVOUS[0];
 
 const $ = id => document.getElementById(id);
+
+/* Channel colours from a scan, by the share of samples above -85 dBm: that
+ * share is what predicts lost packets. */
+export const BUSY_OK = 50;      // < 5 %: green
+export const BUSY_BAD = 200;    // > 20 %: red; in between yellow
+export function busyLevel(permille){
+  return permille < BUSY_OK ? 'good' : permille > BUSY_BAD ? 'bad' : 'fair';
+}
+/* Every rendezvous channel this busy points at the PC, not the room: USB 3.0
+ * next to the dongle raises the whole band. */
+export const BUSY_USB3 = 500;
+
+export function busyText(permille){
+  const pct = permille / 10;
+  return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + '%';
+}
+
+const STATE_LABEL = { awake: 'stAwake', standby: 'stStandby', off: 'stOff', asleep: 'stAsleep' };
+export function stateLabel(st){ return t(STATE_LABEL[st] || 'stAsleep'); }
 
 /* How the page reads an ACK. A tracker command answers STARTED and then,
  * with the same seq, OK when every target confirmed or ENOENT when the dongle
@@ -38,6 +57,7 @@ export function createManage(ctx){
    *        busy(): bool } */
   let timer = null;
   let running = false;
+  let scan = null;        // last channel scan: { results, best, current, at }
 
   function say(el, text, bad = false){
     const p = $(el);
@@ -79,6 +99,7 @@ export function createManage(ctx){
 
   function setDisabled(on){
     for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff']) $(id).disabled = on;
+    $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
   }
 
@@ -89,11 +110,12 @@ export function createManage(ctx){
     const list = $('mgList');
     const now = Date.now();
     const ids = [...d.seen.keys()].sort((a, b) => a - b);
-    let awake = 0;
+    const count = { awake: 0, standby: 0, off: 0, asleep: 0 };
     for (const id of ids){
       const e = d.seen.get(id);
-      const up = isAwake(e, now);
-      if (up) awake++;
+      const st = trackerState(d, id, now);
+      const up = st === 'awake';
+      count[st]++;
       let row = list.querySelector(`[data-tid="${id}"]`);
       if (!row){
         row = document.createElement('div');
@@ -108,47 +130,149 @@ export function createManage(ctx){
       row.className = 'trk' + (up ? '' : ' dim');
       row.querySelector('.tName').textContent = t('otaTracker', { id });
       const bits = [];
-      if (up && e.battery && e.battery.present){
+      if (isAwake(e, now) && e.battery && e.battery.present){
         bits.push(e.battery.charging ? t('battCharging') : t('battPct', { pct: e.battery.pct }));
       }
-      if (up && e.rssi !== undefined) bits.push(e.rssi + ' dBm');
+      if (isAwake(e, now) && e.rssi !== undefined) bits.push(e.rssi + ' dBm');
       if (!up && e.addr) bits.push(e.addr);
       row.querySelector('.tInfo').textContent = bits.join(' · ');
       const badge = row.querySelector('.tState');
-      badge.className = 'tState' + (up ? ' ok' : '');
-      badge.textContent = up ? t('stAwake') : t('stAsleep');
+      badge.className = 'tState' + (up ? ' ok' : st === 'standby' ? ' sb' : '');
+      badge.textContent = stateLabel(st);
       const find = row.querySelector('.tBtn');
       find.textContent = t('mgFind');
-      /* A dozing tracker keeps its light forced off, so a ping would do
+      /* A tracker in standby keeps its light forced off, so a ping would do
        * nothing visible; only offer it for awake ones. */
       find.disabled = !up || running;
     }
     for (const row of [...list.children]){
       if (!d.seen.has(Number(row.dataset.tid))) row.remove();
     }
-    $('mgSummary').textContent = t('mgSummary', { a: awake, b: ids.length - awake });
+    const fresh = d.status && now - d.status.at < 6000;
+    $('mgSummary').textContent = fresh
+      ? t('mgSummary3', { a: count.awake, s: count.standby, o: count.off })
+      : t('mgSummary', { a: count.awake, b: ids.length - count.awake });
+    $('mgOldDongle').classList.toggle('hidden', d.statusSupported !== false);
+    renderChannelState(d);
   }
 
+  /* Cards are built once (full render) and their state - current, scan
+   * colour, recommended - refreshed in place with the list. */
   function renderChannels(){
     const box = $('chCards');
     box.innerHTML = '';
     for (const n of RENDEZVOUS){
       const card = document.createElement('div');
       card.className = 'chCard';
-      const title = document.createElement('div');
+      card.dataset.ch = String(n);
+      const head = document.createElement('div');
+      head.className = 'chHead';
+      const title = document.createElement('span');
       title.className = 'chN';
       title.textContent = t('mgChCard', { n });
+      const tag = document.createElement('span');
+      tag.className = 'chTag hidden';
+      head.append(title, tag);
       const freq = document.createElement('div');
       freq.className = 'chF';
       freq.textContent = t('mgChFreq', { mhz: 2400 + n }) + (n === DEFAULT_CHANNEL ? ' · ' + t('mgChDefault') : '');
+      const busy = document.createElement('div');
+      busy.className = 'chBusy hidden';
       const go = document.createElement('button');
       go.className = 'btn alt small';
-      go.textContent = t('mgChGo');
-      go.disabled = running;
       go.dataset.ch = String(n);
       go.onclick = () => switchChannel(n);
-      card.append(title, freq, go);
+      card.append(head, freq, busy, go);
       box.appendChild(card);
+    }
+    const d = ctx.dongle();
+    if (d) renderChannelState(d);
+  }
+
+  function currentChannel(d){
+    if (d.status && Date.now() - d.status.at < 6000) return d.status.channel;
+    return scan ? scan.current : null;
+  }
+
+  function renderChannelState(d){
+    const cur = currentChannel(d);
+    for (const card of document.querySelectorAll('#chCards .chCard')){
+      const n = Number(card.dataset.ch);
+      const r = scan ? scan.results.find(x => x.channel === n) : null;
+      const lvl = r ? busyLevel(r.busy) : '';
+      card.className = 'chCard' + (lvl ? ' ' + lvl : '') + (n === cur ? ' cur' : '');
+      const tag = card.querySelector('.chTag');
+      const tags = [];
+      if (n === cur) tags.push(t('mgChCurrent'));
+      if (scan && scan.best === n && n !== cur) tags.push(t('mgChBest'));
+      tag.textContent = tags.join(' · ');
+      tag.classList.toggle('hidden', !tags.length);
+      const busy = card.querySelector('.chBusy');
+      busy.textContent = r ? t('mgChBusy', { pct: busyText(r.busy), lvl: t('mgLvl_' + lvl) }) : '';
+      busy.classList.toggle('hidden', !r);
+      const go = card.querySelector('button');
+      go.textContent = n === cur ? t('mgChInUse') : t('mgChGo');
+      go.disabled = running || n === cur;
+    }
+    $('mgChLegend').classList.toggle('hidden', !scan);
+    $('btnScan').disabled = running || d.statusSupported === false;
+    const tip = scan && RENDEZVOUS.every(n => {
+      const r = scan.results.find(x => x.channel === n);
+      return r && r.busy > BUSY_USB3;
+    });
+    $('mgUsb3').classList.toggle('hidden', !tip);
+  }
+
+  async function scanChannels(){
+    const d = ctx.dongle();
+    if (!d || running) return;
+    if (ctx.busy()){ say('mgChMsg', t('mgBusyUpdate'), true); return; }
+    if (!(await ctx.confirm(t('mgScanConfirmT'), t('mgScanConfirm')))) return;
+    running = true;
+    setDisabled(true);
+    let awakeIds = [];
+    try {
+      /* Awake trackers keep retrying on the current channel while the dongle
+       * is not listening; that is our own traffic and would paint the
+       * current channel red. Put them in standby first, wake them after. */
+      const st0 = await d.queryStatus().catch(() => null);
+      const known = st0 ? st0.links.map((l, id) => ({ l, id })).filter(x => x.l !== LINK.GONE) : [];
+      awakeIds = known.filter(x => x.l === LINK.AWAKE).map(x => x.id);
+      if (awakeIds.length){
+        say('mgChMsg', t('mgScanDozing'));
+        await d.command(OP.DOZE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        for (let i = 0; i < 10; i++){
+          await sleep(500);
+          const s1 = await d.queryStatus().catch(() => null);
+          if (!s1 || !s1.links.includes(LINK.AWAKE)) break;
+        }
+      }
+      say('mgChMsg', t('mgScanRunning'));
+      const r = await d.rssiScan();
+      log(`channel scan: ${r.ok ? r.results.map(x => `${x.channel}=${x.busy}`).join(' ') + ` best=${r.best} cur=${r.current}` : 'no result' + (r.busy ? ' (busy)' : '')}`);
+      if (r.ok){
+        scan = { results: r.results, best: r.best, current: r.current, at: Date.now() };
+      }
+      if (awakeIds.length){
+        say('mgChMsg', t('mgScanWaking'));
+        if (awakeIds.length === known.length){
+          await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        } else {
+          for (const id of awakeIds) await d.command(OP.WAKE, [id], { final: true, finalMs: 4000 });
+        }
+      }
+      if (!r.ok) say('mgChMsg', t(r.busy ? 'mgBusy' : 'mgScanFail'), true);
+      else if (r.best === null) say('mgChMsg', t('mgScanDone'));
+      else if (r.best === r.current) say('mgChMsg', t('mgScanKeep', { n: r.best }));
+      else say('mgChMsg', t('mgScanSuggest', { n: r.best }));
+    } catch (e){
+      say('mgChMsg', t('mgNoAnswer'), true);
+      log('channel scan failed: ' + (e && e.message), 'err');
+    } finally {
+      running = false;
+      setDisabled(false);
+      render();
+      d.queryStatus().then(() => render(), () => {});
     }
   }
 
@@ -164,6 +288,8 @@ export function createManage(ctx){
     /* The move itself does not depend on every tracker confirming: the dongle
      * switches after announcing it, and stragglers search their way back. */
     if (out === 'partial') say('mgChMsg', t('mgChDone', { n }));
+    const d = ctx.dongle();
+    if (d && d.statusSupported){ await d.queryStatus().catch(() => null); render(); }
   }
 
   /* full: also rebuild the static parts (channel cards) - on showing the
@@ -183,6 +309,7 @@ export function createManage(ctx){
     $('btnWakeAll').onclick = () => run('mgMsg', OP.WAKE, [ALL_TRACKERS]);
     $('btnPairOn').onclick = () => run('mgPairMsg', OP.PAIR, [0], { final: false, ok: 'mgPairOnDone' });
     $('btnPairOff').onclick = () => run('mgPairMsg', OP.EXIT_PAIR, [], { final: false, ok: 'mgPairOffDone' });
+    $('btnScan').onclick = () => scanChannels();
     bindConsole();
   }
 
@@ -253,6 +380,8 @@ export function createManage(ctx){
 
   return {
     render,
+    /* A different dongle has other surroundings: forget the last scan. */
+    reset(){ scan = null; },
     bind,
     show(){ render(true); if (!timer) timer = setInterval(() => { if (!running) render(); }, 1000); },
     hide(){ clearInterval(timer); timer = null; },

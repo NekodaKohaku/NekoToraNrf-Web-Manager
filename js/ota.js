@@ -55,8 +55,34 @@ export const OP = {
   // tracker remote (ESB_PONG_FLAG_*)
   DOZE: 0x70, WAKE: 0x71, PING: 0x11,
   // dongle
-  PAIR: 201, EXIT_PAIR: 202, DFU: RCV_HID_OP_DFU, TRACKER_CH_ALL: 218, TRACKER_CH_CLR: 219,
+  PAIR: 201, EXIT_PAIR: 202, RSSI_SCAN: 209, DFU: RCV_HID_OP_DFU, TRACKER_CH_ALL: 218, TRACKER_CH_CLR: 219,
+  // NekoTora additions (receiver rcv_hid_cmd.h): RSSI_RESULT is IN only
+  RSSI_RESULT: 252, STATUS: 253,
 };
+
+/* Tracker link state as the dongle sees it (STATUS, 2 bits per id). */
+export const LINK = { GONE: 0, DOZING: 1, AWAKE: 2 };
+
+/* Parse a STATUS ACK's result bytes (ack[4..], layout in rcv_hid_cmd.h). */
+export function parseDongleStatus(data, now = Date.now()){
+  const links = [];
+  for (let i = 0; i < 16; i++) links.push((data[3 + (i >> 2)] >> ((i & 3) * 2)) & 3);
+  return {
+    stored: data[0], channel: data[1],
+    explicit: !!(data[2] & 1), pairing: !!(data[2] & 2), scanning: !!(data[2] & 4),
+    links, at: now,
+  };
+}
+
+/* Parse one RSSI_RESULT ACK's result bytes. */
+export function parseScanResult(data){
+  return {
+    index: data[0], count: data[1], channel: data[2],
+    busy: data[3] | (data[4] << 8),        // permille of samples above -85 dBm
+    peak: -data[5],                          // dBm
+    rendezvous: !!(data[6] & 1), current: !!(data[6] & 2), best: !!(data[6] & 4),
+  };
+}
 export const ALL_TRACKERS = 0xFF;
 
 export const ACK = {
@@ -143,6 +169,9 @@ export class Dongle {
       }
       if (type === RCV_HID_TYPE_ACK){
         this.acks.push({ seq: sub[1], opcode: sub[2], status: sub[3], data: sub.slice(4) });
+        /* Unclaimed ACKs (a command that timed out, results nobody waits
+         * for) must not pile up for the life of the page. */
+        if (this.acks.length > 128) this.acks.splice(0, this.acks.length - 128);
         continue;
       }
       /* Presence tracking. Type 255 is the address-registration padding the
@@ -252,6 +281,39 @@ export class Dongle {
     const first = await wait(timeoutMs);
     if (first && final && first.status === ACK.STARTED) first.final = await wait(finalMs);
     return first;
+  }
+
+  /* Poll the dongle's STATUS (NekoTora receiver firmware). Keeps the result
+   * on the dongle as .status. A dongle without it answers with an error
+   * status, which sets .statusSupported = false; no answer at all leaves the
+   * flag as it was, since that can also be a busy moment. */
+  async queryStatus(){
+    const a = await this.command(OP.STATUS, [], { timeoutMs: 800 });
+    if (!a) return null;
+    if (a.status !== ACK.OK){ this.statusSupported = false; return null; }
+    this.statusSupported = true;
+    this.status = parseDongleStatus(a.data);
+    return this.status;
+  }
+
+  /* Channel scan (about 5 s on the dongle, deaf to trackers meanwhile).
+   * Resolves { ok, results (best first), best, current }. ok false with no
+   * results means the dongle firmware does not report scans over HID, or it
+   * was busy (.busy). */
+  async rssiScan({ all = false, finalMs = 12000 } = {}){
+    const first = await this.command(OP.RSSI_SCAN, [all ? 1 : 0], { final: true, finalMs });
+    if (!first) return { ok: false, results: [] };
+    if (first.status === ACK.EBUSY) return { ok: false, busy: true, results: [] };
+    const seq = first.seq;
+    const results = [];
+    this.acks = this.acks.filter(a => {
+      if (a.seq === seq && a.opcode === OP.RSSI_RESULT){ results.push(parseScanResult(a.data)); return false; }
+      return true;
+    });
+    results.sort((a, b) => a.index - b.index);
+    const f = first.final;
+    if (!f || f.status !== ACK.OK || !results.length) return { ok: false, results };
+    return { ok: true, results, best: f.data[1] === 0xFF ? null : f.data[1], current: f.data[2] };
   }
 
   /* Reboot the dongle into its UF2 bootloader (args[0] = 0: UF2, not OTA DFU).

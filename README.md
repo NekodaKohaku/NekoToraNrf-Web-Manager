@@ -12,7 +12,7 @@ There are three update methods. They install the same firmware; only the route d
 
 ## 🇯🇵 日本語:更新のしかた
 
-ページを Chrome / Edge で開き、右上の「**Dongle を接続**」を押してから「**更新**」タブへ進みます。ワイヤレス更新が既定で、有線と SWD はページ下の「**その他の更新方法**」にあります。ほかに「**管理**」(doze / 起動、トラッカー探し、ペアリング、チャンネル変更)、「**説明**」(ランプ・ボタン・よくある質問)、「**診断**」(サポート用レポート)があります。
+ページを Chrome / Edge で開き、右上の「**Dongle を接続**」を押してから「**更新**」タブへ進みます。ワイヤレス更新が既定で、有線と SWD はページ下の「**その他の更新方法**」にあります。ほかに「**管理**」(スタンバイ / 起動、トラッカー探し、ペアリング、チャンネルのスキャンと変更)、「**説明**」(ランプ・ボタン・よくある質問)、「**診断**」(サポート用レポート)があります。
 ファームウェアは自動的に最新版が選ばれます。ファイルを自分で選ぶ必要はありません。
 
 ### ワイヤレス更新(推奨)
@@ -24,7 +24,7 @@ There are three update methods. They install the same firmware; only the route d
 
 「準備中」の表示が数秒続くのは正常です。トラッカーが更新用の領域を消去しています。
 
-電池が 20% 未満のトラッカーはワイヤレス更新の対象になりません。先に電池を交換してください。doze 中や電源オフのトラッカーは一覧に表示され、「**起動して再確認**」で起こしてからバージョンを確認できます。
+電池が 20% 未満のトラッカーはワイヤレス更新の対象になりません。先に電池を交換してください。スタンバイ中や電源オフのトラッカーは一覧に表示され、「**起動して再確認**」で起こしてからバージョンを確認できます。
 
 **Dongle 本体**も同じ画面で更新できます。一覧の一番上に「Dongle 本体」が表示され、新しい版があれば選択済みになっています。Dongle はトラッカーの後に更新され、再起動して自動で再接続します(約 10 秒、その間は抜かないでください)。
 うまくいかず Dongle が動かなくなった場合は、画面下の「**Dongle の復旧**」の手順(ボタン 10 秒長押し → 現れたドライブに `.uf2` をドラッグ&ドロップ)で必ず戻せます。
@@ -47,7 +47,7 @@ There are three update methods. They install the same firmware; only the route d
 
 ## 🇬🇧 English: How to update
 
-Open the page in Chrome / Edge, press "**Connect Dongle**" at the top right, then go to the "**Update**" tab. Wireless is the default; wired and SWD are under "**Other ways to update**" at the bottom. The other tabs are "**Manage**" (doze / wake, find a tracker, pairing, channel), "**Help**" (lights, buttons, common questions) and "**Diagnostics**" (a report for support).
+Open the page in Chrome / Edge, press "**Connect Dongle**" at the top right, then go to the "**Update**" tab. Wireless is the default; wired and SWD are under "**Other ways to update**" at the bottom. The other tabs are "**Manage**" (standby / wake, find a tracker, pairing, channel scan and change), "**Help**" (lights, buttons, common questions) and "**Diagnostics**" (a report for support).
 The latest firmware is selected for you; you do not need to pick a file.
 
 ### Wireless (recommended)
@@ -59,7 +59,7 @@ The latest firmware is selected for you; you do not need to pick a file.
 
 A few seconds of "Preparing" is normal — the tracker is erasing its update area.
 
-A tracker below 20% battery is not offered for a wireless update; replace the cell first. Dozing or switched-off trackers are listed; "**Wake and check again**" wakes them so their version can be read.
+A tracker below 20% battery is not offered for a wireless update; replace the cell first. Trackers in standby or switched off are listed; "**Wake and check again**" wakes them so their version can be read.
 
 **The dongle itself** updates from the same screen. It is listed first as "Dongle" and pre-selected when a newer version exists. It is updated after the trackers, restarts and reconnects on its own (about 10 seconds - do not unplug it meanwhile).
 If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom always brings it back: hold its button for 10 seconds, then drag the `.uf2` onto the drive that appears.
@@ -82,7 +82,7 @@ If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom alw
 
 ## 🇹🇼 中文:如何更新
 
-用 Chrome / Edge 開啟網頁，按右上角「**連接 Dongle**」，再到「**更新**」分頁。預設是無線更新，有線與 SWD 在頁面下方的「**其他更新方式**」。另外還有「**管理**」（doze／喚醒、找追蹤器、配對、換頻道）、「**說明**」（燈號、按鍵、常見問題）和「**診斷**」（給客服的報告）。
+用 Chrome / Edge 開啟網頁，按右上角「**連接 Dongle**」，再到「**更新**」分頁。預設是無線更新，有線與 SWD 在頁面下方的「**其他更新方式**」。另外還有「**管理**」（待機／喚醒、找追蹤器、配對、掃描與切換頻道）、「**說明**」（燈號、按鍵、常見問題）和「**診斷**」（給客服的報告）。
 韌體會自動選用最新版,不需要自己挑檔案。
 
 ### 無線更新(推薦)
@@ -94,7 +94,7 @@ If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom alw
 
 畫面停在「準備中」數秒是正常的,追蹤器正在抹除更新用的區塊。
 
-電量低於 20% 的追蹤器不能無線更新，請先換電池。doze 中或關機的追蹤器會列在清單中，按「**喚醒並重新檢查**」叫醒後就能讀到版本。
+電量低於 20% 的追蹤器不能無線更新，請先換電池。待機中或關機的追蹤器會列在清單中，按「**喚醒並重新檢查**」叫醒後就能讀到版本。
 
 **Dongle 本體**也在同一個畫面更新。清單最上面會顯示「Dongle 本體」,有新版本時會預先勾選。Dongle 會在追蹤器之後更新,完成後自動重新啟動並重新連線(約 10 秒,期間請勿拔除)。
 萬一 Dongle 因此無法使用,畫面下方的「**Dongle 救援**」一定能救回來:按住 Dongle 按鈕 10 秒,再把 `.uf2` 拖進出現的磁碟。

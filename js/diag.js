@@ -3,7 +3,7 @@
  * Versions, battery and signal for every device the dongle knows, plus the
  * page's own recent log. No names, no addresses beyond the radio address the
  * dongle already prints, nothing from outside this page. */
-import { isAwake } from './telemetry.js';
+import { trackerState } from './telemetry.js';
 import { logLines } from './util.js';
 
 export function buildReport(ctx){
@@ -26,18 +26,26 @@ export function buildReport(ctx){
     L.push('dongle: ' + ctx.dongle.name + (i
       ? ` - ${i.version} (${i.bootloader}, ${i.boardTarget}, built ${i.buildDate})`
       : ' - no firmware info'));
+    const st = ctx.dongle.status;
+    if (st){
+      L.push(`dongle status: channel ${st.channel}${st.explicit ? ' (set)' : ' (default)'}, ` +
+             `${st.stored} stored, pairing ${st.pairing ? 'on' : 'off'}, ` +
+             `${((now - st.at) / 1000).toFixed(1)} s ago`);
+    } else if (ctx.dongle.statusSupported === false){
+      L.push('dongle status: not supported by this firmware');
+    }
     L.push('');
     L.push('trackers:');
     const ids = [...ctx.dongle.seen.keys()].sort((a, b) => a - b);
     if (!ids.length) L.push('  (none)');
     for (const id of ids){
       const e = ctx.dongle.seen.get(id);
-      const up = isAwake(e, now);
+      const state = trackerState(ctx.dongle, id, now);
       const info = ctx.trackers && ctx.trackers.get(id) && ctx.trackers.get(id).info;
       const parts = [
         `#${id}`,
         e.addr || '-',
-        up ? 'awake' : 'dozing-or-off',
+        { awake: 'awake', standby: 'standby (doze)', off: 'off or out of range', asleep: 'standby-or-off' }[state],
       ];
       if (info) parts.push(`fw ${info.version} (${info.bootloader}, ${info.boardTarget})`);
       else if (e.fw) parts.push(`fw ${e.fw}`);

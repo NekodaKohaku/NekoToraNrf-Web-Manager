@@ -149,6 +149,24 @@ nav.tabs button[aria-current="page"]{color:var(--text);border-bottom-color:var(-
 .chCard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
 .chCard .chN{font-weight:700;font-size:17px}
 .chCard .chF{color:var(--muted);font-size:13px}
+.chCard .chHead{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.chCard .chTag{font-size:12px;padding:1px 8px;border-radius:999px;background:var(--primary);color:#fff}
+.chCard .chBusy{font-size:13px;font-weight:600}
+.chCard.cur{border-width:2px;border-color:var(--primary)}
+.chCard.good{background:#f0fdf4;border-color:#86efac}.chCard.good .chBusy{color:#15803d}
+.chCard.fair{background:#fefce8;border-color:#fde047}.chCard.fair .chBusy{color:#a16207}
+.chCard.bad{background:#fef2f2;border-color:#fca5a5}.chCard.bad .chBusy{color:#b91c1c}
+.chCard.cur.good,.chCard.cur.fair,.chCard.cur.bad{border-color:var(--primary)}
+@media (prefers-color-scheme: dark){
+  .chCard.good{background:#052e16;border-color:#166534}.chCard.good .chBusy{color:#86efac}
+  .chCard.fair{background:#2a2206;border-color:#854d0e}.chCard.fair .chBusy{color:#fde047}
+  .chCard.bad{background:#2c0b0b;border-color:#991b1b}.chCard.bad .chBusy{color:#fca5a5}
+}
+.chLegend{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0 0}
+.chDot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:6px}
+.chDot.good{background:#22c55e}.chDot.fair{background:#eab308}.chDot.bad{background:#ef4444}
+.trk .tState.sb{background:#ede9fe;color:#5b21b6}
+@media (prefers-color-scheme: dark){ .trk .tState.sb{background:#2e1065;color:#ddd6fe} }
 .consoleIn{flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
 .overlayBox{background:var(--card);color:var(--text);border-radius:16px;padding:20px 22px;max-width:440px;width:100%;border:1px solid var(--border)}
@@ -388,6 +406,7 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
       </div>
       <p id="mgMsg" class="desc hidden" style="margin-top:10px"></p>
       <div class="trackers" id="mgList" style="margin-top:12px"></div>
+      <p id="mgOldDongle" class="desc hidden" data-i18n="mgOldDongle" style="margin-top:10px"></p>
     </section>
     <section class="card">
       <div class="stepHead"><h2 data-i18n="mgPairTitle"></h2></div>
@@ -401,9 +420,18 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
     <section class="card">
       <div class="stepHead"><h2 data-i18n="mgChTitle"></h2></div>
       <p class="desc" data-i18n="mgChDesc"></p>
+      <div class="row" style="margin-bottom:10px">
+        <button id="btnScan" class="btn primary" data-i18n="mgScan"></button>
+        <span class="desc" data-i18n="mgScanHint"></span>
+      </div>
       <div class="chCards" id="chCards"></div>
+      <p id="mgChLegend" class="chLegend hidden">
+        <span class="chDot good"></span><span data-i18n="mgLegendGood"></span>
+        <span class="chDot fair"></span><span data-i18n="mgLegendFair"></span>
+        <span class="chDot bad"></span><span data-i18n="mgLegendBad"></span>
+      </p>
       <p id="mgChMsg" class="desc hidden" style="margin-top:10px"></p>
-      <p class="desc" data-i18n="mgChNote" style="margin-top:10px"></p>
+      <div id="mgUsb3" class="banner hidden" data-i18n="mgUsb3"></div>
     </section>
     <details class="adv" id="consoleBox">
       <summary data-i18n="mgConsoleTitle"></summary>

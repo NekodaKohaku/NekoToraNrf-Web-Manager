@@ -4,9 +4,9 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { classifyFirmwareFile, MCUBOOT_IMAGE_MAGIC } from '../js/image.js';
-import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS } from '../js/telemetry.js';
-import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL } from '../js/manage.js';
-import { ACK } from '../js/ota.js';
+import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS } from '../js/telemetry.js';
+import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText } from '../js/manage.js';
+import { ACK, parseDongleStatus, parseScanResult } from '../js/ota.js';
 import { EXTRA } from '../js/i18n_extra.js';
 import { HELP_TEXT, HELP_LED_KEYS } from '../js/help.js';
 import { toHex } from './fake_dongle.mjs';
@@ -92,6 +92,26 @@ for (const l of langs){
   const h = HELP_TEXT[l];
   check(`help complete in ${l}`, HELP_LED_KEYS.every(k => h.led[k]) && h.trkBtn.length === HELP_TEXT.en.trkBtn.length
         && h.dglBtn.length === HELP_TEXT.en.dglBtn.length && h.faq.length === HELP_TEXT.en.faq.length);
+}
+
+/* ---- dongle STATUS and scan results (receiver rcv_hid_cmd.h) ---- */
+{
+  // ids 0..3 in data[3]: 0 gone, 1 dozing, 2 awake, 1 dozing
+  const st = parseDongleStatus([5, 24, 0x03, 0b01100100, 0, 0, 0x80], 1000);
+  check('status: count, channel, flags', st.stored === 5 && st.channel === 24 && st.explicit && st.pairing && !st.scanning);
+  check('status: 2-bit link states per id', JSON.stringify(st.links.slice(0, 4)) === '[0,1,2,1]' && st.links[15] === 2, JSON.stringify(st.links));
+  const r = parseScanResult([1, 4, 50, 0x2C, 0x01, 72, 0x05]);
+  check('scan result: channel, busy LE, peak, flags', r.channel === 50 && r.busy === 300 && r.peak === -72 && r.rendezvous && !r.current && r.best, JSON.stringify(r));
+  check('busy levels 5% / 20%', busyLevel(49) === 'good' && busyLevel(50) === 'fair' && busyLevel(200) === 'fair' && busyLevel(201) === 'bad');
+  check('busy text', busyText(3) === '0.3%' && busyText(123) === '12%' && busyText(1000) === '100%', busyText(3) + ' ' + busyText(123));
+  const now = 50000;
+  const d = { seen: new Map([[0, { lastSeen: now - 100 }], [1, {}], [2, {}]]), status: null };
+  check('state without STATUS: awake by telemetry, otherwise cannot tell', trackerState(d, 0, now) === 'awake' && trackerState(d, 1, now) === 'asleep');
+  d.status = { links: [0, 1, 0, 2], at: now - 1000 };
+  check('state with STATUS: standby / off', trackerState(d, 1, now) === 'standby' && trackerState(d, 2, now) === 'off');
+  check('telemetry beats a stale link state', trackerState(d, 0, now) === 'awake');
+  d.status.at = now - STATUS_FRESH_MS - 1;
+  check('stale STATUS is not trusted', trackerState(d, 1, now) === 'asleep');
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

@@ -18,8 +18,8 @@ import { parseUpdateBin, parseAppHex, classifyFirmwareFile } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
 import { Dongle, OtaClient, DONGLE_ID, OP, ALL_TRACKERS } from './ota.js';
-import { batteryBlocks, isAwake } from './telemetry.js';
-import { createManage } from './manage.js';
+import { batteryBlocks, isAwake, trackerState } from './telemetry.js';
+import { createManage, stateLabel } from './manage.js';
 import { renderHelp } from './help.js';
 import { buildReport } from './diag.js';
 import { SmpPort, enterRecovery, uploadImage } from './smp.js';
@@ -289,12 +289,20 @@ function renderTrackers(){
   list.innerHTML = '';
   const want = state.manifest && state.manifest.boardTarget;
 
-  let asleep = 0;
+  const idle = { standby: 0, off: 0, asleep: 0 };
   for (const [id, tk] of state.trackers){
     const row = document.createElement('div');
     row.className = 'trk';
     const live = liveOf(id);
-    if (!tk.online) asleep++;
+    /* Not answering the version query. The dongle's STATUS, when it has
+     * one, says whether that is standby (wakeable) or off. An "awake" link
+     * without an answer counts as standby: waking it does no harm. */
+    let idleState = null;
+    if (!tk.online){
+      idleState = trackerState(state.dongle, id);
+      if (idleState === 'awake') idleState = 'standby';
+      idle[idleState]++;
+    }
     const lowBatt = trackerBatteryBlock(id);
 
     const cb = document.createElement('input');
@@ -328,7 +336,8 @@ function renderTrackers(){
 
     if (!tk.online){
       info.textContent = tk.addr ? tk.addr : '';
-      badge.textContent = t('stAsleep');
+      badge.textContent = stateLabel(idleState);
+      if (idleState === 'standby') badge.classList.add('sb');
     } else if (lowBatt){
       info.textContent = tk.info ? tk.info.version : '';
       badge.textContent = t('battLow', { pct: lowBatt.pct });
@@ -363,9 +372,18 @@ function renderTrackers(){
   }
   /* Registered but silent: dozing or off. Offer to wake them rather than
    * waking them unasked - someone may have dozed them on purpose. */
-  const wake = !state.busy && asleep > 0 && state.method === 'ota';
-  $('wakeBox').classList.toggle('hidden', !wake);
-  if (wake) $('wakeText').textContent = t('wakeText', { n: asleep });
+  const quiet = idle.standby + idle.off + idle.asleep;
+  const show = !state.busy && quiet > 0 && state.method === 'ota';
+  $('wakeBox').classList.toggle('hidden', !show);
+  if (show){
+    /* Only standby (or can't-tell) trackers can be woken from here. */
+    const wakeable = idle.standby + idle.asleep;
+    $('btnWakeScan').classList.toggle('hidden', !wakeable);
+    $('wakeText').textContent = idle.asleep
+      ? t('wakeText', { n: quiet })
+      : [idle.standby ? t('wakeTextStandby', { n: idle.standby }) : '',
+         idle.off ? t('wakeTextOff', { n: idle.off }) : ''].filter(Boolean).join(' ');
+  }
   renderSelCount();
 }
 
@@ -648,6 +666,8 @@ async function connectDongle(){
     state.dongle = d;
     state.ota = new OtaClient(d);
     log('dongle: ' + d.name);
+    manage.reset();
+    await pollStatus();
     await loadManifestFor(match, { detected: true });
     refresh();
     if (state.page === 'manage') manage.render(true);
@@ -972,6 +992,7 @@ async function runDongleUpdate(onEvent){
     state.dongle = d;
     state.ota = new OtaClient(d);
     log('dongle reconnected: ' + d.name);
+    manage.reset();
     await sleep(500);
     const info = await state.ota.queryInfo(DONGLE_ID, 4000);
     state.dongleInfo = info;
@@ -1144,6 +1165,16 @@ function confirmBox(title, text){
     $('btnConfirmYes').onclick = () => done(true);
     $('btnConfirmNo').onclick = () => done(false);
   });
+}
+
+let statusInFlight = false;
+async function pollStatus(){
+  const d = state.dongle;
+  if (!d || statusInFlight || state.updating || state.dongleRebooting || d.statusSupported === false) return;
+  statusInFlight = true;
+  try { await d.queryStatus(); }
+  catch (_) { /* unplugged mid-poll: the disconnect handler cleans up */ }
+  finally { statusInFlight = false; }
 }
 
 async function wakeAndRescan(){
@@ -1326,6 +1357,13 @@ async function init(){
   showView('pre');
   refresh();
   showPage(location.hash.slice(1) || 'home');
+
+  /* Dongle STATUS (standby vs off, channel in use) for the manage and
+   * update pages. Skipped while an update owns the link and once a dongle
+   * has shown it does not know the command. */
+  setInterval(() => {
+    if (state.page === 'manage' || (state.page === 'update' && state.method === 'ota')) pollStatus();
+  }, 1500);
 
   /* Battery and signal keep changing; keep the update list current while it
    * is on screen and nothing is running. */

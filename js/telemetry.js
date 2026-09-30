@@ -61,6 +61,26 @@ export function isAwake(entry, now = Date.now()){
   return !!(entry && entry.lastSeen && now - entry.lastSeen < AWAKE_WINDOW_MS);
 }
 
+/* How long a STATUS answer counts as current. The page polls every 1.5 s. */
+export const STATUS_FRESH_MS = 6000;
+
+/* One tracker as the page shows it:
+ *   'awake'   - streaming (telemetry within the last 2 s, or the dongle says so)
+ *   'standby' - dozing: still PINGs, wakes on command
+ *   'off'     - the dongle hears nothing from it (switched off or out of range)
+ *   'asleep'  - standby or off; a dongle without STATUS cannot tell which
+ * `dongle` is the Dongle (seen + status). */
+export function trackerState(dongle, id, now = Date.now()){
+  const e = dongle && dongle.seen ? dongle.seen.get(id) : null;
+  if (isAwake(e, now)) return 'awake';
+  const s = dongle && dongle.status;
+  if (s && now - s.at < STATUS_FRESH_MS && id >= 0 && id < s.links.length){
+    const l = s.links[id];
+    return l === 2 ? 'awake' : l === 1 ? 'standby' : 'off';
+  }
+  return 'asleep';
+}
+
 /* Why a tracker may not be updated over the air, or null if it may.
  * Unknown battery (no reading yet) is not a reason: the tracker enforces
  * nothing here, the page is being careful, and a unit without telemetry is

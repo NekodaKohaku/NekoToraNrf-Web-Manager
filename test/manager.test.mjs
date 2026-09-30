@@ -7,7 +7,9 @@
  * The dongle is faked at the WebHID boundary: it streams telemetry for three
  * trackers (one healthy, one with a flat battery, one registered but silent),
  * answers FW_INFO, and acknowledges commands the way src/rcv_cmd.c does -
- * STARTED at once for tracker commands, then OK with the same seq. */
+ * STARTED at once for tracker commands, then OK with the same seq. It also
+ * answers STATUS (253) and runs channel scans (209 -> RSSI_RESULT 252 reports
+ * -> completion), as the NekoTora receiver firmware does. */
 import { JSDOM } from '/tmp/node_modules/jsdom/lib/api.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -47,6 +49,13 @@ const { HID, DONGLE_ID } = await import(pathToFileURL(join(root, 'js/ota.js')).h
 /* ---------------------------- fake dongle ---------------------------- */
 const cmds = [];
 let respondAcks = true;
+let supportStatus = true;
+/* Dongle-side view: link state per tracker id (2 awake, 1 dozing, 0 gone),
+ * channel in use, and what the next scan measures (busy permille). */
+const links = { 1: 2, 2: 2, 3: 1 };
+let channel = 76;
+let scanBusy = { 2: 3, 50: 30, 76: 120, 24: 400 };
+let streaming = true;
 const dongle = {
   opened: false, productName: 'NekoTora Dongle', listeners: [],
   addEventListener(_, fn){ this.listeners.push(fn); },
@@ -54,7 +63,23 @@ const dongle = {
   async open(){ this.opened = true; },
   async close(){ this.opened = false; },
   emit(b){ const dv = new DataView(b.buffer); for (const l of this.listeners) l({ data: dv }); },
-  ack(seq, op, st){ const f = new Uint8Array(64); f[0] = 251; f[1] = seq; f[2] = op; f[3] = st; this.emit(f); },
+  /* The rest of the report is registration padding, as src/hid.c fills it. */
+  ack(seq, op, st, data = []){
+    const f = new Uint8Array(64); f[0] = 251; f[1] = seq; f[2] = op; f[3] = st; f.set(data, 4);
+    f.set(reg(1), 16); f.set(reg(2), 32); f.set(reg(3), 48);
+    this.emit(f);
+  },
+  status(seq){
+    const d = [3, channel, channel !== 76 ? 1 : 0, 0, 0, 0, 0];
+    for (const [id, l] of Object.entries(links)) d[3 + (id >> 2)] |= l << ((id & 3) * 2);
+    this.ack(seq, 253, 0, d);
+  },
+  scan(seq){
+    const chs = Object.keys(scanBusy).map(Number).sort((a, b) => scanBusy[a] - scanBusy[b]);
+    chs.forEach((ch, i) => setTimeout(() => this.ack(seq, 252, 0,
+      [i, chs.length, ch, scanBusy[ch] & 0xFF, scanBusy[ch] >> 8, 70, 1 | (ch === channel ? 2 : 0) | (i === 0 ? 4 : 0)]), 80 + i * 3));
+    setTimeout(() => this.ack(seq, 209, 0, [chs.length, chs[0], channel]), 80 + chs.length * 3 + 5);
+  },
   fwInfo(tid, ver, bl, board){
     const info = new Uint8Array(66);
     info[0] = HID.FW_INFO; info[1] = tid; info.set(ver, 2); info[13] = bl; info[14] = 1;
@@ -72,6 +97,19 @@ const dongle = {
     if (p[0] === 254){
       cmds.push({ seq: p[1], op: p[2], args: [...p.subarray(4, 8)] });
       if (!respondAcks) return;
+      if (p[2] === 253){
+        if (supportStatus) setTimeout(() => this.status(p[1]), 3);
+        else setTimeout(() => this.ack(p[1], 253, 1), 3);    // older firmware: EINVAL
+        return;
+      }
+      if (p[2] === 209){ setTimeout(() => this.ack(p[1], 209, 7), 5); this.scan(p[1]); return; }
+      if (p[2] === 0x70 || p[2] === 0x71){
+        const on = p[2] === 0x71, all = p[4] === 0xFF;
+        for (const id of [1, 2]) if (all || p[4] === id) links[id] = on ? 2 : 1;
+        streaming = links[1] === 2;
+      }
+      if (p[2] === 218) channel = p[4];
+      if (p[2] === 219) channel = 76;
       const tracker = p[2] >= 1 && p[2] <= 200;
       const slow = tracker || p[2] === 218 || p[2] === 219;
       setTimeout(() => this.ack(p[1], p[2], slow ? 7 : 0), 5);
@@ -98,7 +136,7 @@ function reg(id){
 }
 let battery2 = 10, charging2 = false;
 setInterval(() => {
-  if (!dongle.opened) return;
+  if (!dongle.opened || !streaming) return;
   const f = new Uint8Array(64);
   f.set(info(1, 85, 145, 52), 0);
   f.set(info(2, battery2, charging2 ? 190 : 125, 60), 16);
@@ -154,16 +192,26 @@ await until(() => shown('manageBody') && $('mgList').children.length === 3);
 check('chip says connected', /已連接/.test(txt('dongleChip')), txt('dongleChip'));
 check('connect button hidden once connected', !shown('btnTopConnect'));
 check('manage lists three trackers', $('mgList').children.length === 3, $('mgList').children.length);
-await until(() => /醒著 2/.test(txt('mgSummary')));
-check('summary: 2 awake, 1 dozing or off', /醒著 2.*1/.test(txt('mgSummary')), txt('mgSummary'));
+await until(() => /運作中 2・待機 1・關機 0/.test(txt('mgSummary')));
+check('summary from STATUS: 2 active, 1 standby, 0 off', /運作中 2・待機 1・關機 0/.test(txt('mgSummary')), txt('mgSummary'));
 const row = id => $('mgList').querySelector(`[data-tid="${id}"]`);
+await until(() => /85%/.test(row(1).textContent));
 check('tracker 1 shows battery and signal', /85%/.test(row(1).textContent) && /-52 dBm/.test(row(1).textContent), row(1).textContent);
-check('silent tracker marked dozing or off', /doze 或關機/.test(row(3).textContent), row(3).textContent);
+check('silent tracker marked standby (from STATUS)', /待機/.test(row(3).querySelector('.tState').textContent), row(3).textContent);
+links[3] = 0;
+await until(() => /關機/.test(row(3).querySelector('.tState').textContent), 4000);
+check('gone tracker marked off', /關機或不在範圍/.test(row(3).querySelector('.tState').textContent), row(3).textContent);
+links[3] = 1;
+await until(() => /^待機$/.test(row(3).querySelector('.tState').textContent), 4000);
+check('no "doze" left on the page', !/doze/i.test(txt('pageManage')), txt('pageManage').match(/.{20}doze.{20}/i));
+check('doze button says standby', txt('btnDozeAll') === '全部待機', txt('btnDozeAll'));
 check('find disabled for the silent tracker', row(3).querySelector('button').disabled);
 check('find enabled for an awake tracker', !row(1).querySelector('button').disabled);
 
 /* ----------------------------- commands ------------------------------ */
-const last = () => cmds[cmds.length - 1];
+/* Last command other than the background STATUS poll. */
+const user = () => cmds.filter(c => c.op !== 253);
+const last = () => { const u = user(); return u[u.length - 1]; };
 click($('btnDozeAll'));
 await until(() => /完成/.test(txt('mgMsg')));
 check('doze all -> 0x70 to all', last().op === 0x70 && last().args[0] === 0xFF, JSON.stringify(last()));
@@ -183,23 +231,23 @@ await until(() => /已結束/.test(txt('mgPairMsg')));
 check('stop pairing -> op 202', last().op === 202);
 
 respondAcks = false;
-const before = cmds.length;
+const before = user().length;
 click($('btnDozeAll'));
 await until(() => /沒有回應/.test(txt('mgMsg')), 3000);
 check('no ACK -> says the dongle did not answer', /沒有回應/.test(txt('mgMsg')), txt('mgMsg'));
-check('...and the command was sent once', cmds.length === before + 1);
+check('...and the command was sent once', user().length === before + 1);
 respondAcks = true;
 
 /* ------------------------------ channel ------------------------------ */
 const chBtn = n => $('chCards').querySelector(`button[data-ch="${n}"]`);
 check('four rendezvous channel cards', $('chCards').children.length === 4);
-const n0 = cmds.length;
+const n0 = user().length;
 click(chBtn(50));
 await sleep(50);
 check('channel asks for confirmation', shown('confirmOverlay') && /50/.test(txt('confirmTitle')));
 click($('btnConfirmNo'));
 await sleep(50);
-check('cancel sends nothing', cmds.length === n0 && !shown('confirmOverlay'));
+check('cancel sends nothing', user().length === n0 && !shown('confirmOverlay'));
 click(chBtn(50));
 await sleep(50);
 click($('btnConfirmYes'));
@@ -211,6 +259,35 @@ await sleep(50);
 click($('btnConfirmYes'));
 await until(() => /已切換到頻道 76/.test(txt('mgChMsg')));
 check('default channel -> clear (op 219), not a stored 76', last().op === 219, JSON.stringify(last()));
+await until(() => chBtn(76).disabled);
+check('current channel card marked and its button disabled', /目前/.test(chBtn(76).closest('.chCard').textContent) && chBtn(76).disabled, chBtn(76).closest('.chCard').textContent);
+
+/* ------------------------------- scan -------------------------------- */
+const card = n => chBtn(n).closest('.chCard');
+check('scan button offered', shown('btnScan') && !$('btnScan').disabled);
+await until(() => links[1] === 2 && /運作中 2/.test(txt('mgSummary')));
+const ns = cmds.length;
+click($('btnScan'));
+await sleep(50);
+check('scan asks first', shown('confirmOverlay') && /掃描/.test(txt('confirmTitle')));
+click($('btnConfirmYes'));
+await until(() => /建議切換到頻道 2/.test(txt('mgChMsg')) && card(2).classList.contains('good'), 8000);
+const seqOps = cmds.slice(ns).map(c => c.op).filter(op => op !== 253);
+check('scan: standby first, then scan, then wake the two that were active',
+      JSON.stringify(seqOps) === JSON.stringify([0x70, 209, 0x71, 0x71]), JSON.stringify(cmds.slice(ns).map(c => [c.op, c.args[0]])));
+const wakes = cmds.slice(ns).filter(c => c.op === 0x71).map(c => c.args[0]);
+check('...woken one by one (tracker 3 was already in standby)', JSON.stringify(wakes) === '[1,2]', JSON.stringify(wakes));
+check('scan suggests the cleanest channel', /建議切換到頻道 2/.test(txt('mgChMsg')), txt('mgChMsg'));
+check('channel 2 green and recommended', card(2).classList.contains('good') && /推薦/.test(card(2).textContent) && /0\.3%/.test(card(2).textContent), card(2).className + ' ' + card(2).textContent);
+check('channel 76 yellow and current', card(76).classList.contains('fair') && card(76).classList.contains('cur') && /12\.0%|12%/.test(card(76).textContent), card(76).className + ' ' + card(76).textContent);
+check('channel 24 red', card(24).classList.contains('bad'), card(24).className);
+check('legend shown after a scan', shown('mgChLegend'));
+check('no USB 3.0 warning for a normal room', !shown('mgUsb3'));
+scanBusy = { 2: 770, 50: 800, 76: 980, 24: 900 };
+click($('btnScan')); await sleep(50); click($('btnConfirmYes'));
+await until(() => shown('mgUsb3'), 8000);
+check('every channel crowded -> USB 3.0 advice', shown('mgUsb3') && /USB 3\.0/.test(txt('mgUsb3')));
+scanBusy = { 2: 3, 50: 30, 76: 120, 24: 400 };
 
 /* ---------------------------- update page ---------------------------- */
 await gotoPage('update');
@@ -256,7 +333,14 @@ check('unknown file refused', shown('fwErr') && /無法辨識/.test(txt('fwErr')
 await gotoPage('diag');
 click($('btnDiagMake'));
 await sleep(50);
-check('report lists the trackers with battery', /#1 .*battery 85%/.test(txt('diagOut')) && /#3 .*dozing-or-off/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
+check('report lists the trackers with battery', /#1 .*battery 85%/.test(txt('diagOut')) && /#3 .*standby/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
+check('report has the dongle status line', /dongle status: channel 76/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
+
+/* --------------------------- older dongle ---------------------------- */
+supportStatus = false;
+await gotoPage('manage');
+await until(() => shown('mgOldDongle'), 4000);
+check('dongle without STATUS: explains, and scan is disabled', shown('mgOldDongle') && $('btnScan').disabled);
 check('report names the dongle firmware', /dongle: .*1\.0\.0/.test(txt('diagOut')));
 check('download enabled after making it', !$('btnDiagDl').disabled);
 

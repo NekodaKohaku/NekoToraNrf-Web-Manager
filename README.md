@@ -24,7 +24,7 @@ There are three update methods. They install the same firmware; only the route d
 
 「準備中」の表示が数秒続くのは正常です。トラッカーが更新用の領域を消去しています。
 
-電池が 20% 未満のトラッカーは、充電中でない限りワイヤレス更新の対象になりません。doze 中や電源オフのトラッカーは一覧に表示され、「**起動して再確認**」で起こしてからバージョンを確認できます。
+電池が 20% 未満のトラッカーはワイヤレス更新の対象になりません。先に電池を交換してください。doze 中や電源オフのトラッカーは一覧に表示され、「**起動して再確認**」で起こしてからバージョンを確認できます。
 
 **Dongle 本体**も同じ画面で更新できます。一覧の一番上に「Dongle 本体」が表示され、新しい版があれば選択済みになっています。Dongle はトラッカーの後に更新され、再起動して自動で再接続します(約 10 秒、その間は抜かないでください)。
 うまくいかず Dongle が動かなくなった場合は、画面下の「**Dongle の復旧**」の手順(ボタン 10 秒長押し → 現れたドライブに `.uf2` をドラッグ&ドロップ)で必ず戻せます。
@@ -59,7 +59,7 @@ The latest firmware is selected for you; you do not need to pick a file.
 
 A few seconds of "Preparing" is normal — the tracker is erasing its update area.
 
-A tracker below 20% battery is not offered for a wireless update unless it is charging. Dozing or switched-off trackers are listed; "**Wake and check again**" wakes them so their version can be read.
+A tracker below 20% battery is not offered for a wireless update; replace the cell first. Dozing or switched-off trackers are listed; "**Wake and check again**" wakes them so their version can be read.
 
 **The dongle itself** updates from the same screen. It is listed first as "Dongle" and pre-selected when a newer version exists. It is updated after the trackers, restarts and reconnects on its own (about 10 seconds - do not unplug it meanwhile).
 If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom always brings it back: hold its button for 10 seconds, then drag the `.uf2` onto the drive that appears.
@@ -94,7 +94,7 @@ If that ever leaves the dongle unusable, "**Dongle recovery**" at the bottom alw
 
 畫面停在「準備中」數秒是正常的,追蹤器正在抹除更新用的區塊。
 
-電量低於 20% 且沒在充電的追蹤器不能無線更新。doze 中或關機的追蹤器會列在清單中，按「**喚醒並重新檢查**」叫醒後就能讀到版本。
+電量低於 20% 的追蹤器不能無線更新，請先換電池。doze 中或關機的追蹤器會列在清單中，按「**喚醒並重新檢查**」叫醒後就能讀到版本。
 
 **Dongle 本體**也在同一個畫面更新。清單最上面會顯示「Dongle 本體」,有新版本時會預先勾選。Dongle 會在追蹤器之後更新,完成後自動重新啟動並重新連線(約 10 秒,期間請勿拔除)。
 萬一 Dongle 因此無法使用,畫面下方的「**Dongle 救援**」一定能救回來:按住 Dongle 按鈕 10 秒,再把 `.uf2` 拖進出現的磁碟。

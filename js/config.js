@@ -85,7 +85,8 @@ export const OTA_SEQUENTIAL = true;
 export const DFU_BAUD = 1000000;
 
 /* Trackers below this charge are not offered for a wireless update unless
- * they are charging (or run without a battery).
+ * they run without a battery or report external power (>= 4.31 V; NekoTora
+ * trackers have no charger, so in practice they never do).
  *
  * An interrupted transfer is harmless - the old image stays in place - but the
  * copy the bootloader makes after the reboot is not, and its flash erase draws

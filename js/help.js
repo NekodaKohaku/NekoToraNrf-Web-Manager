@@ -9,7 +9,9 @@
  */
 
 /* Light patterns as [brightness 0..1, ms] segments, repeated. Colours are the
- * RGB build's; a single-colour LED keeps the timing and ignores the colour. */
+ * RGB build's; a single-colour LED keeps the timing and ignores the colour.
+ * NekoTora trackers have no charger, so the firmware's charging / charged
+ * patterns are left out. */
 const Q = [[1, 200], [0, 200]];                       // one "quick" blink
 const quick = (n, pauseMs = 0) => [...Array(n).fill(Q).flat(), ...(pauseMs ? [[0, pauseMs]] : [])];
 
@@ -28,8 +30,6 @@ const LED = [
   { k: 'ping',     c: C.ping, seq: quick(10, 1000) },
   { k: 'calStill', c: C.cal,  seq: [[1, 500], [0, 500]] },
   { k: 'calRec',   c: C.cal,  seq: [[1, 1000]] },
-  { k: 'charging', c: C.chg,  breathe: 5000 },
-  { k: 'charged',  c: C.ok,   seq: [[0.2, 1000]] },
   { k: 'lowBatt',  c: C.chg,  seq: [[0.2, 500], [0, 500]] },
   { k: 'errSensor',   c: C.err, seq: quick(2, 4200) },
   { k: 'errReceiver', c: C.err, seq: quick(3, 3800) },
@@ -51,11 +51,9 @@ const TEXT = {
       ping: ['找追蹤器', '白色快閃 10 下'],
       calStill: ['校正：請保持不動', '青色，0.5 秒亮暗'],
       calRec: ['校正：記錄中', '青色恆亮'],
-      charging: ['充電中', '橘色，5 秒呼吸'],
-      charged: ['已充飽', '綠色微亮'],
       lowBatt: ['電量低', '橘色微亮閃爍'],
       errSensor: ['錯誤：感測器', '紅色，每 5 秒閃 2 下'],
-      errReceiver: ['錯誤：找不到接收器', '紅色，每 5 秒閃 3 下'],
+      errReceiver: ['錯誤：找不到接收器（約 7 分鐘收不到後才出現，3 分鐘後轉入 doze）', '紅色，每 5 秒閃 3 下'],
       errSystem: ['錯誤：系統（例如電池讀數異常）', '紅色，每 5 秒閃 4 下'],
     },
     trkBtnTitle: '追蹤器按鈕',
@@ -82,7 +80,7 @@ const TEXT = {
     faq: [
       ['追蹤器常斷線，或頻道掃描每個頻道都很擁擠', 'Dongle 可能太靠近 USB 3.0 的連接埠、線材或集線器，它們會干擾整個 2.4 GHz。改插 USB 2.0 連接埠，或用延長線把 Dongle 拉開 30 公分以上。'],
       ['清單顯示「doze 或關機」', '按一下 Dongle，或在「管理」按「全部喚醒」。還是沒反應，就是關機了，請按追蹤器按鈕開機。'],
-      ['無線更新時選不到某顆追蹤器', '可能電量低於 20%（插上充電就能選）、在 doze（按「喚醒並重新檢查」），或型號和韌體不符。'],
+      ['無線更新時選不到某顆追蹤器', '可能電量低於 20%（換上新電池或充好的電池就能選）、在 doze（按「喚醒並重新檢查」），或型號和韌體不符。'],
       ['更新失敗了', '傳輸中斷不會讓追蹤器變磚，原本的韌體還在，重試即可。把追蹤器放近 Dongle 再試。'],
       ['Dongle 更新後沒有反應', '到「更新」頁最下方的「Dongle 救援」：按住 Dongle 按鈕 10 秒，把 .uf2 拖進出現的磁碟機。'],
       ['換頻道後有追蹤器沒跟上', '只要是四個匯合頻道（76、2、24、50），它會在約 30 秒內自己找回來；當時關機的，開機後也會找回來。'],
@@ -103,11 +101,9 @@ const TEXT = {
       ping: ['Find my tracker', '10 quick white blinks'],
       calStill: ['Calibration: hold still', 'Cyan, 0.5 s on / off'],
       calRec: ['Calibration: recording', 'Cyan, steady'],
-      charging: ['Charging', 'Orange, 5 s breathing'],
-      charged: ['Charged', 'Dim green'],
       lowBatt: ['Low battery', 'Dim orange blinking'],
       errSensor: ['Error: sensor', 'Red, 2 blinks every 5 s'],
-      errReceiver: ['Error: no receiver', 'Red, 3 blinks every 5 s'],
+      errReceiver: ['Error: no receiver (after about 7 minutes without one; dozes 3 minutes later)', 'Red, 3 blinks every 5 s'],
       errSystem: ['Error: system (e.g. implausible battery reading)', 'Red, 4 blinks every 5 s'],
     },
     trkBtnTitle: 'Tracker button',
@@ -134,7 +130,7 @@ const TEXT = {
     faq: [
       ['Trackers drop out, or every channel looks busy in a scan', 'The dongle is probably too close to a USB 3.0 port, cable or hub; they disturb the whole 2.4 GHz band. Use a USB 2.0 port, or an extension cable that puts the dongle 30 cm or more away.'],
       ['The list says "Dozing or off"', 'Press the dongle button once, or "Wake all" under Manage. If it still does not respond it is switched off - press the tracker button.'],
-      ['A tracker cannot be selected for a wireless update', 'Its battery may be under 20% (plug it in to charge and it becomes selectable), it may be dozing ("Wake and check again"), or its model does not match the firmware.'],
+      ['A tracker cannot be selected for a wireless update', 'Its battery may be under 20% (fit a fresh or recharged cell and it becomes selectable), it may be dozing ("Wake and check again"), or its model does not match the firmware.'],
       ['The update failed', 'An interrupted transfer does not brick the tracker - the old firmware is still there. Try again with the tracker closer to the dongle.'],
       ['The dongle does nothing after its update', 'Use "Dongle recovery" at the bottom of the Update page: hold the dongle button for 10 seconds and drag the .uf2 onto the drive that appears.'],
       ['A tracker did not follow a channel change', 'On the four rendezvous channels (76, 2, 24, 50) it finds its way back within about 30 seconds; one that was switched off does so after it is switched on.'],
@@ -155,11 +151,9 @@ const TEXT = {
       ping: ['トラッカーを探す', '白で素早く 10 回点滅'],
       calStill: ['キャリブレーション:静止', 'シアン、0.5 秒ごとに点滅'],
       calRec: ['キャリブレーション:記録中', 'シアン点灯'],
-      charging: ['充電中', 'オレンジ、5 秒周期でゆっくり明滅'],
-      charged: ['充電完了', '緑で薄く点灯'],
       lowBatt: ['電池残量低下', 'オレンジで薄く点滅'],
       errSensor: ['エラー:センサー', '赤、5 秒ごとに 2 回点滅'],
-      errReceiver: ['エラー:レシーバーが見つからない', '赤、5 秒ごとに 3 回点滅'],
+      errReceiver: ['エラー:レシーバーが見つからない(約 7 分間見つからないと表示、その 3 分後に doze)', '赤、5 秒ごとに 3 回点滅'],
       errSystem: ['エラー:システム(電池の値が異常など)', '赤、5 秒ごとに 4 回点滅'],
     },
     trkBtnTitle: 'トラッカーのボタン',
@@ -186,7 +180,7 @@ const TEXT = {
     faq: [
       ['トラッカーがよく切れる、またはスキャンでどのチャンネルも混んでいる', 'Dongle が USB 3.0 のポート・ケーブル・ハブに近すぎる可能性があります。これらは 2.4 GHz 帯全体に干渉します。USB 2.0 ポートに挿すか、延長ケーブルで 30 cm 以上離してください。'],
       ['一覧に「doze 中または電源オフ」と出る', 'Dongle のボタンを 1 回押すか、「管理」の「すべて起動」を押します。それでも反応しなければ電源オフです。トラッカーのボタンで電源を入れてください。'],
-      ['ワイヤレス更新であるトラッカーを選べない', '電池が 20% 未満(充電ケーブルを挿せば選べます)、doze 中(「起動して再確認」)、または機種がファームウェアと合っていない可能性があります。'],
+      ['ワイヤレス更新であるトラッカーを選べない', '電池が 20% 未満(新しい電池か充電済みの電池に交換すれば選べます)、doze 中(「起動して再確認」)、または機種がファームウェアと合っていない可能性があります。'],
       ['更新に失敗した', '転送が途中で止まってもトラッカーは壊れません。元のファームウェアが残っているので、Dongle に近づけてもう一度お試しください。'],
       ['更新後に Dongle が動かない', '「更新」ページ下の「Dongle の復旧」を使います。Dongle のボタンを 10 秒押し、現れたドライブに .uf2 をドラッグ&ドロップします。'],
       ['チャンネル変更についてこないトラッカーがある', '4 つの合流チャンネル(76、2、24、50)なら約 30 秒以内に自分で戻ってきます。電源オフだったものも電源を入れた後に戻ります。'],

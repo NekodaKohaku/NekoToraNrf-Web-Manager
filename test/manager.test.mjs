@@ -228,7 +228,9 @@ check('four home cards (calibration not shown yet)', window.document.querySelect
 check('chip says not connected', /未連接/.test(txt('dongleChip')), txt('dongleChip'));
 await gotoPage('help');
 check('help page shown', shown('pageHelp') && !shown('pageHome'));
-check('help: 13 light rows (no charging patterns)', window.document.querySelectorAll('#helpBody table.help')[0].querySelectorAll('tbody tr').length === 13);
+check('help: 20 tracker light rows (no charging patterns)', window.document.querySelectorAll('#helpBody table.help')[0].querySelectorAll('tbody tr').length === 20);
+check('help: wireless update light listed', /無線更新中/.test(txt('helpBody')));
+check('help: dongle light table with 10 rows', window.document.querySelectorAll('#helpBody table.help')[1].querySelectorAll('tbody tr').length === 10);
 check('nav marks the current page', window.document.querySelector('#nav button[aria-current="page"]').dataset.page === 'help');
 for (const l of ['en', 'ja', 'zh']){
   $('langSel').value = l; $('langSel').dispatchEvent(new window.Event('change')); await sleep(30);

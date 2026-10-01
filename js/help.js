@@ -14,6 +14,10 @@
  * patterns are left out. */
 const Q = [[1, 200], [0, 200]];                       // one "quick" blink
 const quick = (n, pauseMs = 0) => [...Array(n).fill(Q).flat(), ...(pauseMs ? [[0, pauseMs]] : [])];
+/* Error codes: 0.5 s on / 0.5 s off, n times, repeated every 5 s. */
+const slow = n => [...Array(n).fill([[1, 500], [0, 500]]).flat(), [0, 5000 - n * 1000]];
+/* Power-off: a moment dark, then a one-second fade, shown on a loop. */
+const fade = [[0, 250], ...Array.from({ length: 10 }, (_, i) => [1 - i / 10, 100]), [0, 1500]];
 
 const C = {
   def: 'rgb(102,153,0)', ok: 'rgb(0,200,60)', err: 'rgb(230,30,30)', chg: 'rgb(230,90,0)',
@@ -23,17 +27,40 @@ const C = {
 const LED = [
   { k: 'normal',   c: C.def,  seq: [[1, 300], [0, 9700]] },
   { k: 'boot',     c: C.def,  seq: quick(3, 2000) },
+  { k: 'shutdown', c: C.def,  seq: fade },
   { k: 'dozeIn',   c: C.doze, seq: quick(2, 2400) },
   { k: 'dozing',   c: null,   seq: [[0, 1000]] },
   { k: 'pairing',  c: C.pair, seq: [[1, 100], [0, 900]] },
   { k: 'paired',   c: C.ok,   seq: quick(4, 1600) },
   { k: 'ping',     c: C.ping, seq: quick(10, 1000) },
+  { k: 'btnHeld',  c: C.def,  seq: [[1, 1000]] },
+  { k: 'btnAck',   c: C.ok,   seq: quick(2, 2400) },
+  { k: 'holdOff',  c: C.def,  seq: [[1, 500], [0, 500]] },
   { k: 'calStill', c: C.cal,  seq: [[1, 500], [0, 500]] },
   { k: 'calRec',   c: C.cal,  seq: [[1, 1000]] },
+  { k: 'calDone',  c: C.ok,   seq: quick(4, 1600) },
+  { k: 'ota',      c: C.chg,  seq: [[1, 100], [0, 100]] },
+  { k: 'dfu',      c: C.def,  seq: [[1, 1000]] },
   { k: 'lowBatt',  c: C.chg,  seq: [[0.2, 500], [0, 500]] },
-  { k: 'errSensor',   c: C.err, seq: quick(2, 4200) },
-  { k: 'errReceiver', c: C.err, seq: quick(3, 3800) },
-  { k: 'errSystem',   c: C.err, seq: quick(4, 3400) },
+  { k: 'errSensor',   c: C.err, seq: slow(2) },
+  { k: 'errReceiver', c: C.err, seq: slow(3) },
+  { k: 'errSystem',   c: C.err, seq: slow(4) },
+];
+
+/* Dongle: one single-colour LED (receiver src/main.c, system/system.c,
+ * connection/esb.c). Shown in a neutral colour. */
+const D = 'rgb(255,190,60)';
+const LED_DONGLE = [
+  { k: 'dNormal',  c: D, seq: [[1, 300], [0, 9700]] },
+  { k: 'dPairing', c: D, seq: [[1, 100], [0, 900]] },
+  { k: 'dPaired',  c: D, seq: quick(2, 2400) },
+  { k: 'dDozeAll', c: D, seq: quick(2, 2400) },
+  { k: 'dWakeAll', c: D, seq: quick(3, 2000) },
+  { k: 'dNothing', c: D, seq: slow(2) },
+  { k: 'dHeld',    c: D, seq: [[1, 1000], [0, 1000]] },
+  { k: 'dCleared', c: D, seq: quick(4, 1600) },
+  { k: 'dRescue',  c: D, seq: [[1, 500], [0, 500]] },
+  { k: 'dError',   c: D, seq: slow(3) },
 ];
 
 const TEXT = {
@@ -44,17 +71,37 @@ const TEXT = {
     led: {
       normal: ['正常運作', '每 10 秒亮 0.3 秒'],
       boot: ['每次開機、從待機醒來', '快閃 3 下'],
+      shutdown: ['關機', '暗一下後，1 秒內漸漸熄滅'],
       dozeIn: ['進入待機', '紫色快閃 2 下後熄滅'],
       dozing: ['待機中', '不亮'],
       pairing: ['配對模式', '藍色，亮 0.1 秒、暗 0.9 秒'],
       paired: ['配對完成', '綠色快閃 4 下'],
       ping: ['找追蹤器', '白色快閃 10 下'],
+      btnHeld: ['按著按鈕', '恆亮'],
+      btnAck: ['按鈕動作已接受（更新中按下也是這樣，但動作會被擋下）', '綠色快閃 2 下'],
+      holdOff: ['按住準備關機：放開就關機，繼續按住約 5 秒則取消', '0.5 秒亮暗'],
       calStill: ['校正：請保持不動', '青色，0.5 秒亮暗'],
       calRec: ['校正：記錄中', '青色恆亮'],
+      calDone: ['校正完成', '綠色快閃 4 下'],
+      ota: ['無線更新中（請勿關機）', '橘色快速閃爍，亮 0.1 秒、暗 0.1 秒'],
+      dfu: ['有線更新模式（快按 4 下進入）', '單色 LED 恆亮；LED strip 不亮'],
       lowBatt: ['電量低', '橘色微亮閃爍'],
       errSensor: ['錯誤：感測器', '紅色，每 5 秒閃 2 下'],
       errReceiver: ['錯誤：找不到接收器（約 30 秒收不到就出現，約 10 分鐘後轉入待機）', '紅色，每 5 秒閃 3 下'],
       errSystem: ['錯誤：系統（例如電池讀數異常）', '紅色，每 5 秒閃 4 下'],
+    },
+    dglLedTitle: 'Dongle 燈號',
+    dglLed: {
+      dNormal: ['正常運作', '每 10 秒亮 0.3 秒'],
+      dPairing: ['配對模式', '亮 0.1 秒、暗 0.9 秒'],
+      dPaired: ['有追蹤器配對成功', '快閃 2 下'],
+      dDozeAll: ['按一下：全部待機', '快閃 2 下'],
+      dWakeAll: ['按一下：全部喚醒', '快閃 3 下'],
+      dNothing: ['按一下，但沒有可切換的追蹤器（都關機了）', '慢閃 2 下'],
+      dHeld: ['按著按鈕', '恆亮；按住超過 1 秒後每秒亮暗交替，方便數秒'],
+      dCleared: ['已清除所有配對（按住 5 秒放開，或插上時按住 5 秒）', '快閃 4 下'],
+      dRescue: ['按住 10 秒：進入救援模式（UF2）', '慢閃後重新啟動，電腦會出現一個 USB 磁碟機'],
+      dError: ['錯誤', '每 5 秒慢閃 2–4 下（請到「診斷」產生報告）'],
     },
     trkBtnTitle: '追蹤器按鈕',
     dglBtnTitle: 'Dongle 按鈕',
@@ -97,17 +144,37 @@ const TEXT = {
     led: {
       normal: ['Normal operation', '0.3 s on every 10 s'],
       boot: ['Every power-on, waking from standby', '3 quick blinks'],
+      shutdown: ['Power off', 'A moment dark, then a 1 s fade out'],
       dozeIn: ['Entering standby', '2 quick purple blinks, then dark'],
       dozing: ['In standby', 'Off'],
       pairing: ['Pairing mode', 'Blue, 0.1 s on / 0.9 s off'],
       paired: ['Paired', '4 quick green blinks'],
       ping: ['Find my tracker', '10 quick white blinks'],
+      btnHeld: ['Button held down', 'Steady'],
+      btnAck: ['Button action accepted (also shown during an update, when the action is blocked)', '2 quick green blinks'],
+      holdOff: ['Holding to power off: release to switch off, keep holding about 5 s to cancel', '0.5 s on / off'],
       calStill: ['Calibration: hold still', 'Cyan, 0.5 s on / off'],
       calRec: ['Calibration: recording', 'Cyan, steady'],
+      calDone: ['Calibration done', '4 quick green blinks'],
+      ota: ['Wireless update running (do not switch off)', 'Fast orange flashing, 0.1 s on / 0.1 s off'],
+      dfu: ['Wired update mode (press 4 times quickly)', 'Single-colour LED steady; LED strip dark'],
       lowBatt: ['Low battery', 'Dim orange blinking'],
       errSensor: ['Error: sensor', 'Red, 2 blinks every 5 s'],
       errReceiver: ['Error: no receiver (after about 30 seconds without one; standby after about 10 minutes)', 'Red, 3 blinks every 5 s'],
       errSystem: ['Error: system (e.g. implausible battery reading)', 'Red, 4 blinks every 5 s'],
+    },
+    dglLedTitle: 'Dongle light',
+    dglLed: {
+      dNormal: ['Normal operation', '0.3 s on every 10 s'],
+      dPairing: ['Pairing mode', '0.1 s on / 0.9 s off'],
+      dPaired: ['A tracker paired', '2 quick blinks'],
+      dDozeAll: ['Pressed once: standby all', '2 quick blinks'],
+      dWakeAll: ['Pressed once: wake all', '3 quick blinks'],
+      dNothing: ['Pressed once, nothing to switch (all trackers off)', '2 slow blinks'],
+      dHeld: ['Button held down', 'Steady; after 1 s it toggles every second so you can count'],
+      dCleared: ['All pairings cleared (hold 5 s and release, or hold 5 s while plugging in)', '4 quick blinks'],
+      dRescue: ['Hold 10 s: recovery mode (UF2)', 'Slow blinking, then it restarts and a USB drive appears'],
+      dError: ['Error', '2-4 slow blinks every 5 s (make a report under Diagnostics)'],
     },
     trkBtnTitle: 'Tracker button',
     dglBtnTitle: 'Dongle button',
@@ -150,17 +217,37 @@ const TEXT = {
     led: {
       normal: ['通常動作', '10 秒ごとに 0.3 秒点灯'],
       boot: ['毎回の電源オン、スタンバイからの復帰', '素早く 3 回点滅'],
+      shutdown: ['電源オフ', '一瞬消えてから 1 秒かけて消灯'],
       dozeIn: ['スタンバイに入る', '紫で素早く 2 回点滅して消灯'],
       dozing: ['スタンバイ中', '消灯'],
       pairing: ['ペアリングモード', '青、0.1 秒点灯・0.9 秒消灯'],
       paired: ['ペアリング完了', '緑で素早く 4 回点滅'],
       ping: ['トラッカーを探す', '白で素早く 10 回点滅'],
+      btnHeld: ['ボタンを押している', '点灯'],
+      btnAck: ['ボタン操作を受け付けた(更新中に押した場合も同じですが、操作は無効になります)', '緑で素早く 2 回点滅'],
+      holdOff: ['長押しで電源オフ待ち:離すと電源オフ、さらに約 5 秒押し続けるとキャンセル', '0.5 秒ごとに点滅'],
       calStill: ['キャリブレーション:静止', 'シアン、0.5 秒ごとに点滅'],
       calRec: ['キャリブレーション:記録中', 'シアン点灯'],
+      calDone: ['キャリブレーション完了', '緑で素早く 4 回点滅'],
+      ota: ['ワイヤレス更新中(電源を切らないでください)', 'オレンジで速く点滅、0.1 秒点灯・0.1 秒消灯'],
+      dfu: ['有線更新モード(素早く 4 回押して入る)', '単色 LED は点灯、LED テープは消灯'],
       lowBatt: ['電池残量低下', 'オレンジで薄く点滅'],
       errSensor: ['エラー:センサー', '赤、5 秒ごとに 2 回点滅'],
       errReceiver: ['エラー:レシーバーが見つからない(約 30 秒見つからないと表示、約 10 分後にスタンバイ)', '赤、5 秒ごとに 3 回点滅'],
       errSystem: ['エラー:システム(電池の値が異常など)', '赤、5 秒ごとに 4 回点滅'],
+    },
+    dglLedTitle: 'ドングルのランプ',
+    dglLed: {
+      dNormal: ['通常動作', '10 秒ごとに 0.3 秒点灯'],
+      dPairing: ['ペアリングモード', '0.1 秒点灯・0.9 秒消灯'],
+      dPaired: ['トラッカーのペアリング成功', '素早く 2 回点滅'],
+      dDozeAll: ['1 回押す:すべてスタンバイ', '素早く 2 回点滅'],
+      dWakeAll: ['1 回押す:すべて起動', '素早く 3 回点滅'],
+      dNothing: ['1 回押したが切り替える対象がない(すべて電源オフ)', 'ゆっくり 2 回点滅'],
+      dHeld: ['ボタンを押している', '点灯。1 秒以上押すと毎秒点滅して秒数を数えられます'],
+      dCleared: ['ペアリングをすべて消去(5 秒押して離す、または挿すときに 5 秒押す)', '素早く 4 回点滅'],
+      dRescue: ['10 秒押し続ける:復旧モード(UF2)', 'ゆっくり点滅した後に再起動し、USB ドライブが現れます'],
+      dError: ['エラー', '5 秒ごとにゆっくり 2〜4 回点滅(「診断」でレポートを作成してください)'],
     },
     trkBtnTitle: 'トラッカーのボタン',
     dglBtnTitle: 'ドングルのボタン',
@@ -235,10 +322,19 @@ export function renderHelp(root, lang){
     `<table class="help"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
   const pairs = list => list.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>`).join('');
 
+  const dRows = LED_DONGLE.map((item, i) => {
+    const name = 'dled' + i;
+    css += keyframes(name, item);
+    const dot = `<span class="ledDot" style="background:${item.c};box-shadow:0 0 0 1px var(--border);animation:${name} ${duration(item)}ms step-end infinite"></span>`;
+    const [state, light] = T.dglLed[item.k];
+    return `<tr><td>${esc(state)}</td><td>${esc(light)}</td><td>${dot}</td></tr>`;
+  }).join('');
+
   root.innerHTML =
     `<style>${css}</style>` +
     `<section class="card"><div class="stepHead"><h2>${esc(T.ledTitle)}</h2></div>` +
     `<p class="desc">${esc(T.ledDesc)}</p>${table(T.cols, rows)}</section>` +
+    `<section class="card"><div class="stepHead"><h2>${esc(T.dglLedTitle)}</h2></div>${table(T.cols, dRows)}</section>` +
     `<section class="card"><div class="stepHead"><h2>${esc(T.trkBtnTitle)}</h2></div>${table(T.btnCols, pairs(T.trkBtn))}` +
     `<div class="stepHead" style="margin-top:18px"><h2>${esc(T.dglBtnTitle)}</h2></div>${table(T.btnCols, pairs(T.dglBtn))}` +
     `<p class="desc" style="margin-top:10px">${esc(T.btnNote)}</p></section>` +
@@ -249,4 +345,5 @@ export function renderHelp(root, lang){
 
 export const HELP_LANGS = Object.keys(TEXT);
 export const HELP_LED_KEYS = LED.map(l => l.k);
+export const HELP_DONGLE_LED_KEYS = LED_DONGLE.map(l => l.k);
 export const HELP_TEXT = TEXT;

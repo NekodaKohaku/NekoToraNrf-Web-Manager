@@ -8,7 +8,7 @@ import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WI
 import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText, calApplyEvent } from '../js/manage.js';
 import { ACK, parseDongleStatus, parseScanResult, parseTrackerEvent, TEV } from '../js/ota.js';
 import { EXTRA } from '../js/i18n_extra.js';
-import { HELP_TEXT, HELP_LED_KEYS } from '../js/help.js';
+import { HELP_TEXT, HELP_LED_KEYS, HELP_DONGLE_LED_KEYS } from '../js/help.js';
 import { toHex } from './fake_dongle.mjs';
 
 let fails = 0;
@@ -90,7 +90,7 @@ for (const l of langs){
 }
 for (const l of langs){
   const h = HELP_TEXT[l];
-  check(`help complete in ${l}`, HELP_LED_KEYS.every(k => h.led[k]) && h.trkBtn.length === HELP_TEXT.en.trkBtn.length
+  check(`help complete in ${l}`, HELP_LED_KEYS.every(k => h.led[k]) && HELP_DONGLE_LED_KEYS.every(k => h.dglLed[k]) && h.trkBtn.length === HELP_TEXT.en.trkBtn.length
         && h.dglBtn.length === HELP_TEXT.en.dglBtn.length && h.faq.length === HELP_TEXT.en.faq.length);
 }
 

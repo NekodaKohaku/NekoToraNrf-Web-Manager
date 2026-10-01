@@ -84,6 +84,22 @@ function setBar(frac){
   const p = Math.round(Math.max(0, Math.min(1, frac)) * 100);
   $('barFill').style.width = p + '%';
   $('pct').textContent = p + '%';
+  state.pct = p;
+  syncUpdateUi();
+}
+
+/* While an update runs: the browser tab title carries the progress (seen
+ * from other tabs), other pages of the manager show a banner back to it, and
+ * the manage page is greyed out. */
+const BASE_TITLE = document.title;
+function syncUpdateUi(){
+  const on = !!state.updating;
+  const pct = state.pct || 0;
+  document.title = on ? `(${pct}%) ${t('updTitle')} - ${BASE_TITLE}` : BASE_TITLE;
+  const banner = on && state.page !== 'update';
+  $('updBanner').classList.toggle('hidden', !banner);
+  if (banner) $('updBannerText').textContent = t('updBanner', { pct });
+  $('manageBody').classList.toggle('locked', on);
 }
 function phase(name, frac){
   const [a, b] = PH[name] || [0, 1];
@@ -489,6 +505,7 @@ function gate(){
    * from under it: both wait until it is over. */
   $('card1').classList.toggle('disabled', !!state.updating);
   $('advanced').classList.toggle('disabled', !!state.updating);
+  syncUpdateUi();
   $('btnStart').disabled = !readyToStart() || state.busy;
 
   /* Holding the button down is an SWD-only requirement: it is what keeps the
@@ -1154,6 +1171,7 @@ function showPage(name){
   if (name === 'manage') manage.show(); else manage.hide();
   if (name === 'help') renderHelp($('helpBody'), getLang());
   if (name === 'update') refresh();
+  syncUpdateUi();
 }
 
 function go(name){
@@ -1351,6 +1369,14 @@ async function init(){
   for (const b of document.querySelectorAll('.homeCard')) b.onclick = () => go(b.dataset.go);
   window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
   $('btnTopConnect').onclick = connectDongle;
+  $('btnUpdBack').onclick = () => go('update');
+  /* Closing or reloading the tab is the one thing that really interrupts an
+   * update; ask first. (Browsers show their own wording.) */
+  window.addEventListener('beforeunload', e => {
+    if (!state.updating) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
   $('btnWakeScan').onclick = () => wakeAndRescan().catch(e => connFail(e));
   $('btnUf2').onclick = async () => {
     if (!state.dongle) return;

@@ -58,6 +58,9 @@ main{max-width:820px;margin:0 auto;padding:8px 20px 48px}
 .btn.primary:disabled{background:var(--border);color:var(--muted);cursor:not-allowed}
 .btn.big{width:100%;padding:14px;font-size:16px}
 .btn.alt{background:var(--border);color:var(--text)}
+.updBanner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--sel-bg);border:1px solid var(--primary);border-radius:12px;padding:10px 14px;margin:12px 0;font-size:14px;font-weight:600}
+/* While an update runs, the manage page is look-but-don't-touch. */
+#manageBody.locked>.card,#manageBody.locked>details{opacity:.45;pointer-events:none}
 .btn.good{background:var(--ok);color:#fff}
 .btn.good:hover{filter:brightness(.92)}
 .btn.good:disabled{background:var(--border);color:var(--muted);cursor:not-allowed;filter:none}
@@ -262,6 +265,10 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
 
 <main>
 <div id="unsupported" class="banner hidden"></div>
+<div id="updBanner" class="updBanner hidden" role="status">
+  <span id="updBannerText"></span>
+  <button id="btnUpdBack" class="btn primary small" data-i18n="updBack"></button>
+</div>
 
 <!-- ============================ home ============================= -->
 <section class="page" id="pageHome">

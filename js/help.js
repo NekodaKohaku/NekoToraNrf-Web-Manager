@@ -9,7 +9,7 @@
  */
 
 /* Light patterns as [brightness 0..1, ms] segments, repeated. Colours are the
- * RGB build's; a single-colour LED keeps the timing and ignores the colour.
+ * RGB / LED-strip build's (NekoTora ships LED-strip trackers only).
  * NekoTora trackers have no charger, so the firmware's charging / charged
  * patterns are left out. */
 const Q = [[1, 200], [0, 200]];                       // one "quick" blink
@@ -40,7 +40,7 @@ const LED = [
   { k: 'calRec',   c: C.cal,  seq: [[1, 1000]] },
   { k: 'calDone',  c: C.ok,   seq: quick(4, 1600) },
   { k: 'ota',      c: C.chg,  seq: [[1, 100], [0, 100]] },
-  { k: 'dfu',      c: C.def,  seq: [[1, 1000]] },
+  { k: 'dfu',      c: null,   seq: [[0, 1000]] },
   { k: 'lowBatt',  c: C.chg,  seq: [[0.2, 500], [0, 500]] },
   { k: 'errSensor',   c: C.err, seq: slow(2) },
   { k: 'errReceiver', c: C.err, seq: slow(3) },
@@ -66,7 +66,7 @@ const LED_DONGLE = [
 const TEXT = {
   zh: {
     ledTitle: '追蹤器燈號',
-    ledDesc: '下面的圓點會照實際節奏閃爍。單色 LED 節奏相同，只是沒有顏色。',
+    ledDesc: '下面的圓點會照實際的顏色和節奏閃爍。',
     cols: ['狀態', '燈號', '示範'],
     led: {
       normal: ['正常運作', '每 10 秒亮 0.3 秒'],
@@ -84,7 +84,7 @@ const TEXT = {
       calRec: ['校正：記錄中', '青色恆亮'],
       calDone: ['校正完成', '綠色快閃 4 下'],
       ota: ['無線更新中（請勿關機）', '橘色快速閃爍，亮 0.1 秒、暗 0.1 秒'],
-      dfu: ['有線更新模式（快按 4 下進入）', '單色 LED 恆亮；LED strip 不亮'],
+      dfu: ['有線更新模式（快按 4 下進入，電腦會出現一個 USB 序列埠）', '不亮'],
       lowBatt: ['電量低', '橘色微亮閃爍'],
       errSensor: ['錯誤：感測器', '紅色，每 5 秒閃 2 下'],
       errReceiver: ['錯誤：找不到接收器（約 30 秒收不到就出現，約 10 分鐘後轉入待機）', '紅色，每 5 秒閃 3 下'],
@@ -139,7 +139,7 @@ const TEXT = {
   },
   en: {
     ledTitle: 'Tracker lights',
-    ledDesc: 'The dots below blink at the real timing. A single-colour LED keeps the timing without the colour.',
+    ledDesc: 'The dots below blink in the real colours and timing.',
     cols: ['State', 'Light', 'Example'],
     led: {
       normal: ['Normal operation', '0.3 s on every 10 s'],
@@ -157,7 +157,7 @@ const TEXT = {
       calRec: ['Calibration: recording', 'Cyan, steady'],
       calDone: ['Calibration done', '4 quick green blinks'],
       ota: ['Wireless update running (do not switch off)', 'Fast orange flashing, 0.1 s on / 0.1 s off'],
-      dfu: ['Wired update mode (press 4 times quickly)', 'Single-colour LED steady; LED strip dark'],
+      dfu: ['Wired update mode (press 4 times quickly; a USB serial port appears on the PC)', 'Off'],
       lowBatt: ['Low battery', 'Dim orange blinking'],
       errSensor: ['Error: sensor', 'Red, 2 blinks every 5 s'],
       errReceiver: ['Error: no receiver (after about 30 seconds without one; standby after about 10 minutes)', 'Red, 3 blinks every 5 s'],
@@ -212,7 +212,7 @@ const TEXT = {
   },
   ja: {
     ledTitle: 'トラッカーのランプ',
-    ledDesc: '下の丸は実際のタイミングで点滅します。単色 LED はタイミングだけ同じで色はありません。',
+    ledDesc: '下の丸は実際の色とタイミングで点滅します。',
     cols: ['状態', 'ランプ', '例'],
     led: {
       normal: ['通常動作', '10 秒ごとに 0.3 秒点灯'],
@@ -230,7 +230,7 @@ const TEXT = {
       calRec: ['キャリブレーション:記録中', 'シアン点灯'],
       calDone: ['キャリブレーション完了', '緑で素早く 4 回点滅'],
       ota: ['ワイヤレス更新中(電源を切らないでください)', 'オレンジで速く点滅、0.1 秒点灯・0.1 秒消灯'],
-      dfu: ['有線更新モード(素早く 4 回押して入る)', '単色 LED は点灯、LED テープは消灯'],
+      dfu: ['有線更新モード(素早く 4 回押して入る。PC に USB シリアルポートが現れます)', '消灯'],
       lowBatt: ['電池残量低下', 'オレンジで薄く点滅'],
       errSensor: ['エラー:センサー', '赤、5 秒ごとに 2 回点滅'],
       errReceiver: ['エラー:レシーバーが見つからない(約 30 秒見つからないと表示、約 10 分後にスタンバイ)', '赤、5 秒ごとに 3 回点滅'],

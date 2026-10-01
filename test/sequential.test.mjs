@@ -131,7 +131,13 @@ check('all six pre-selected (no cap any more)', boxes().filter(b => b.checked).l
       boxes().filter(b => b.checked).length + ' ticked');
 
 click('btnStart');
-await new Promise(r => setTimeout(r, 12000));
+await new Promise(r => setTimeout(r, 300));
+check('progress card stays readable while updating', !$('card4').classList.contains('disabled') && !$('progressArea').classList.contains('hidden'));
+check('other ways to update greyed out while updating', $('card1').classList.contains('disabled'));
+check('advanced / manual file greyed out while updating', $('advanced').classList.contains('disabled'));
+await new Promise(r => setTimeout(r, 11700));
+check('other ways to update usable again afterwards', !$('card1').classList.contains('disabled') && !$('advanced').classList.contains('disabled'));
+check('result card not greyed out', !$('card4').classList.contains('disabled'));
 
 check('every tracker got a session', sessions.length === 6, String(sessions.length));
 check('never more than one at a time', maxConcurrent === 1, 'max concurrent = ' + maxConcurrent);

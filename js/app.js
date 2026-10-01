@@ -481,7 +481,14 @@ function otaTargets(){
 function gate(){
   $('card2').classList.toggle('disabled', state.busy);
   $('card3').classList.toggle('disabled', !connected() || state.busy);
-  $('card4').classList.toggle('disabled', !connected() || state.busy);
+  /* The update card is where progress and the result are shown: greyed out
+   * only while it is still waiting to start (not connected, or a scan is
+   * running) - never while it reports on a running or finished update. */
+  $('card4').classList.toggle('disabled', state.view === 'pre' && (!connected() || state.busy));
+  /* Switching method or dropping in a file mid-update would pull the ground
+   * from under it: both wait until it is over. */
+  $('card1').classList.toggle('disabled', !!state.updating);
+  $('advanced').classList.toggle('disabled', !!state.updating);
   $('btnStart').disabled = !readyToStart() || state.busy;
 
   /* Holding the button down is an SWD-only requirement: it is what keeps the
@@ -501,6 +508,7 @@ function gate(){
 }
 
 function showView(v){
+  state.view = v;
   $('preUpdate').classList.toggle('hidden', v !== 'pre');
   $('progressArea').classList.toggle('hidden', v !== 'progress');
   $('resultOk').classList.toggle('hidden', v !== 'ok');
@@ -796,8 +804,8 @@ async function start(){
   state.busy = true;
   state.updating = true;
   await liveIdle();
-  gate();
   showView('progress');
+  gate();
   setBar(0);
   $('errDetail').textContent = '';
   renderTrackerProgress(null);

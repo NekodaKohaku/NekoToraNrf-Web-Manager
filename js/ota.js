@@ -58,7 +58,40 @@ export const OP = {
   PAIR: 201, EXIT_PAIR: 202, RSSI_SCAN: 209, DFU: RCV_HID_OP_DFU, TRACKER_CH_ALL: 218, TRACKER_CH_CLR: 219,
   // NekoTora additions (receiver rcv_hid_cmd.h): RSSI_RESULT is IN only
   RSSI_RESULT: 252, STATUS: 253,
+  // tracker remote: ZRO calibration (ESB_PONG_FLAG_CALIBRATE)
+  CALIBRATE: 0x02,
+  // tracker events (receiver tracker_event_protocol.h): subscribe, then
+  // TRACKER_EVENT records arrive unasked
+  TRACKER_EVENTS: 224, TRACKER_EVENT: 225,
 };
+
+/* Tracker event constants (tracker_event_protocol.h, version 1). */
+export const TEV = {
+  VERSION: 1,
+  SUBSCRIBE: 1, RENEW: 2,
+  MASK_CAL: 1,                 // calibration kinds 1..7
+  LEASE_MS: 15000,
+  // event
+  ACCEPTED: 1, BEGIN: 2, STEP: 3, END: 4, REJECTED: 5,
+  // outcome
+  SUCCESS: 1, FAILED: 2, CANCELLED: 3, SKIPPED: 4,
+  // kind
+  KIND_ZRO: 1, ORIGIN_AUTO: 0x80,
+  // phase
+  PH_WAIT_STILL: 2, PH_COLLECT: 4,
+  // reason (END detail)
+  R_BUSY: 1, R_SENSOR: 4, R_MOTION: 5, R_TIMEOUT: 6, R_SAMPLES: 7, R_TEMPERATURE: 23,
+};
+
+/* One TRACKER_EVENT record (16 bytes, tracker_event_encode_hid). */
+export function parseTrackerEvent(sub){
+  return {
+    event: sub[3] & 15, outcome: sub[3] >> 4, tracker: sub[4],
+    nonce: (sub[5] | (sub[6] << 8) | (sub[7] << 16) | (sub[8] << 24)) >>> 0,
+    seq: sub[9] | (sub[10] << 8), op: sub[11] | (sub[12] << 8),
+    kind: sub[13], phase: sub[14], detail: sub[15],
+  };
+}
 
 /* Tracker link state as the dongle sees it (STATUS, 2 bits per id). */
 export const LINK = { GONE: 0, DOZING: 1, AWAKE: 2 };
@@ -138,6 +171,8 @@ export class Dongle {
     this.waiters = [];            // resolvers waiting on new traffic
     this.seen = new Map();        // trackerId -> {addr, online, lastSeen, battery, rssi, fw}
     this.acks = [];               // command ACKs not yet claimed
+    this.eventListeners = new Set();
+    this.eventKeys = new Set();   // de-duplicates the dongle's repeats
     this.seq = 0;
     this._onInput = this._onInput.bind(this);
   }
@@ -165,6 +200,17 @@ export class Dongle {
       const type = sub[0], tid = sub[1];
       if (type >= 0xF0 && type <= 0xF7){
         this.queue.push(sub);
+        continue;
+      }
+      if (type === RCV_HID_TYPE_ACK && sub[2] === OP.TRACKER_EVENT && len >= 16){
+        /* Sent unasked (seq 0) to a subscriber, each up to 3 times. */
+        const e = parseTrackerEvent(sub);
+        const key = `${e.tracker}:${e.nonce}:${e.seq}`;
+        if (!this.eventKeys.has(key)){
+          this.eventKeys.add(key);
+          if (this.eventKeys.size > 256) this.eventKeys.delete(this.eventKeys.values().next().value);
+          for (const fn of this.eventListeners) fn(e);
+        }
         continue;
       }
       if (type === RCV_HID_TYPE_ACK){
@@ -294,6 +340,19 @@ export class Dongle {
     this.statusSupported = true;
     this.status = parseDongleStatus(a.data);
     return this.status;
+  }
+
+  /* Subscribe to calibration events (renew with RENEW before LEASE_MS runs
+   * out). Resolves true when the dongle forwards them. The dongle keeps one
+   * subscription; nothing here cancels it - it lapses on its own. */
+  async subscribeCalEvents(action = TEV.SUBSCRIBE){
+    const a = await this.command(OP.TRACKER_EVENTS, [TEV.VERSION, action, 0xFF, TEV.MASK_CAL], { timeoutMs: 800 });
+    return !!a && a.status === ACK.OK;
+  }
+
+  onTrackerEvent(fn){
+    this.eventListeners.add(fn);
+    return () => this.eventListeners.delete(fn);
   }
 
   /* Channel scan (about 5 s on the dongle, deaf to trackers meanwhile).

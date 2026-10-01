@@ -5,8 +5,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { classifyFirmwareFile, MCUBOOT_IMAGE_MAGIC } from '../js/image.js';
 import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS } from '../js/telemetry.js';
-import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText } from '../js/manage.js';
-import { ACK, parseDongleStatus, parseScanResult } from '../js/ota.js';
+import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText, calApplyEvent } from '../js/manage.js';
+import { ACK, parseDongleStatus, parseScanResult, parseTrackerEvent, TEV } from '../js/ota.js';
 import { EXTRA } from '../js/i18n_extra.js';
 import { HELP_TEXT, HELP_LED_KEYS } from '../js/help.js';
 import { toHex } from './fake_dongle.mjs';
@@ -112,6 +112,24 @@ for (const l of langs){
   check('telemetry beats a stale link state', trackerState(d, 0, now) === 'awake');
   d.status.at = now - STATUS_FRESH_MS - 1;
   check('stale STATUS is not trusted', trackerState(d, 1, now) === 'asleep');
+}
+
+/* ---- calibration events ---- */
+{
+  const e = parseTrackerEvent([251, 0, 225, 4 | (2 << 4), 3, 1, 2, 0, 0, 9, 0, 0x34, 0x12, 1, 4, 5]);
+  check('event record decoded', e.event === 4 && e.outcome === 2 && e.tracker === 3 && e.nonce === 0x201 && e.seq === 9 && e.op === 0x1234 && e.kind === 1 && e.detail === 5, JSON.stringify(e));
+  const run = { since: 1000, targets: new Set([1, 2]), results: new Map() };
+  const ev = (tracker, event, outcome, op, extra = {}) => ({ tracker, event, outcome, op, kind: TEV.KIND_ZRO, phase: 4, detail: 0, ...extra });
+  check('event before the command is ignored', !calApplyEvent(run, ev(1, TEV.END, TEV.SUCCESS, 5), 900));
+  check('auto-origin calibration ignored', !calApplyEvent(run, ev(1, TEV.BEGIN, 0, 6, { kind: TEV.KIND_ZRO | TEV.ORIGIN_AUTO }), 1100));
+  check('untargeted tracker ignored', !calApplyEvent(run, ev(3, TEV.BEGIN, 0, 6), 1100));
+  calApplyEvent(run, ev(1, TEV.BEGIN, 0, 6), 1100);
+  check('begin -> running', run.results.get(1).st === 'run');
+  check('END of another operation ignored', !calApplyEvent(run, ev(1, TEV.END, TEV.SUCCESS, 5), 1200) && run.results.get(1).st === 'run');
+  calApplyEvent(run, ev(1, TEV.END, TEV.FAILED, 6, { detail: TEV.R_MOTION }), 1300);
+  check('failed END keeps the reason', run.results.get(1).st === 'fail' && run.results.get(1).why === 'calR_motion');
+  calApplyEvent(run, ev(2, TEV.END, TEV.SUCCESS, 8), 1300);
+  check('END without a seen begin still counts', run.results.get(2).st === 'ok');
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

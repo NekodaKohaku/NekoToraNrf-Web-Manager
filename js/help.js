@@ -78,6 +78,7 @@ const TEXT = {
     btnNote: '以上是標準韌體的設定。',
     faqTitle: '常見問題',
     faq: [
+      ['追蹤器會慢慢飄、方向越來越歪', '到「管理」頁的「校正」：追蹤器全部平放在地上，按「開始校正」等約 10 秒。剛開機的話先等 1 分鐘讓溫度穩定。'],
       ['追蹤器常斷線，或「掃描頻道」每個頻道都是紅色', 'Dongle 可能太靠近 USB 3.0 的連接埠、線材或集線器，它們會干擾整個 2.4 GHz。改插 USB 2.0 連接埠，或用延長線把 Dongle 拉開 30 公分以上。'],
       ['清單顯示「待機」或「關機」', '待機的按一下 Dongle，或在「管理」按「全部喚醒」。關機或不在範圍內的，請把追蹤器拿近 Dongle 並按按鈕開機。'],
       ['無線更新時選不到某顆追蹤器', '可能電量低於 20%（換上新電池或充好的電池就能選）、在待機（按「喚醒並重新檢查」），或型號和韌體不符。'],
@@ -128,6 +129,7 @@ const TEXT = {
     btnNote: 'These are the standard firmware settings.',
     faqTitle: 'Common questions',
     faq: [
+      ['Trackers slowly drift off their heading', 'Use "Calibration" on the Manage page: lay all trackers flat on the floor, press "Start calibration" and wait about 10 seconds. Right after switching on, give them a minute to warm up first.'],
       ['Trackers drop out, or "Scan channels" shows every channel red', 'The dongle is probably too close to a USB 3.0 port, cable or hub; they disturb the whole 2.4 GHz band. Use a USB 2.0 port, or an extension cable that puts the dongle 30 cm or more away.'],
       ['The list says "Standby" or "Off"', 'For standby, press the dongle button once or "Wake all" under Manage. For off or out of range, bring the tracker near the dongle and press its button.'],
       ['A tracker cannot be selected for a wireless update', 'Its battery may be under 20% (fit a fresh or recharged cell and it becomes selectable), it may be in standby ("Wake and check again"), or its model does not match the firmware.'],
@@ -178,6 +180,7 @@ const TEXT = {
     btnNote: '標準ファームウェアの設定です。',
     faqTitle: 'よくある質問',
     faq: [
+      ['トラッカーの向きが少しずつずれていく', '「管理」ページの「キャリブレーション」を使います。トラッカーをすべて床に平らに置き、「キャリブレーション開始」を押して約 10 秒待ちます。電源を入れた直後なら、1 分ほど待って温度を安定させてから行ってください。'],
       ['トラッカーがよく切れる、または「チャンネルをスキャン」でどれも赤', 'Dongle が USB 3.0 のポート・ケーブル・ハブに近すぎる可能性があります。これらは 2.4 GHz 帯全体に干渉します。USB 2.0 ポートに挿すか、延長ケーブルで 30 cm 以上離してください。'],
       ['一覧に「スタンバイ」や「電源オフ」と出る', 'スタンバイなら Dongle のボタンを 1 回押すか、「管理」の「すべて起動」を押します。電源オフまたは圏外なら、トラッカーを Dongle に近づけてボタンで電源を入れてください。'],
       ['ワイヤレス更新であるトラッカーを選べない', '電池が 20% 未満(新しい電池か充電済みの電池に交換すれば選べます)、スタンバイ中(「起動して再確認」)、または機種がファームウェアと合っていない可能性があります。'],

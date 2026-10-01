@@ -56,8 +56,11 @@ const links = { 1: 2, 2: 2, 3: 1 };
 let channel = 76;
 let scanBusy = { 2: 3, 50: 30, 76: 120, 24: 400 };
 let streaming = true;
+let supportEvents = true;
+let calFail2 = true;          // tracker 2 reports movement
+const subs = [];
 const dongle = {
-  opened: false, productName: 'NekoTora Dongle', listeners: [],
+  opened: false, productName: 'NekoTora Dongle', listeners: [], runs: 0,
   addEventListener(_, fn){ this.listeners.push(fn); },
   removeEventListener(_, fn){ this.listeners = this.listeners.filter(l => l !== fn); },
   async open(){ this.opened = true; },
@@ -73,6 +76,15 @@ const dongle = {
     const d = [3, channel, channel !== 76 ? 1 : 0, 0, 0, 0, 0];
     for (const [id, l] of Object.entries(links)) d[3 + (id >> 2)] |= l << ((id & 3) * 2);
     this.ack(seq, 253, 0, d);
+  },
+  /* A TRACKER_EVENT record (tracker_event_encode_hid), padded like a report. */
+  event(tid, ev, outcome, op, phase, detail, nonce){
+    nonce += 10000 * (++this.runs);     // every event its own nonce, as on a tracker
+    const f = new Uint8Array(64);
+    f.set([251, 0, 225, ev | (outcome << 4), tid, nonce & 255, (nonce >> 8) & 255, 0, 0, ev, 0, op & 255, op >> 8, 1, phase, detail]);
+    f.set(reg(1), 16); f.set(reg(2), 32); f.set(reg(3), 48);
+    this.emit(f);
+    this.emit(f);                       // the dongle repeats events
   },
   scan(seq){
     const chs = Object.keys(scanBusy).map(Number).sort((a, b) => scanBusy[a] - scanBusy[b]);
@@ -100,6 +112,25 @@ const dongle = {
       if (p[2] === 253){
         if (supportStatus) setTimeout(() => this.status(p[1]), 3);
         else setTimeout(() => this.ack(p[1], 253, 1), 3);    // older firmware: EINVAL
+        return;
+      }
+      if (p[2] === 224){
+        subs.push([...p.subarray(4, 8)]);
+        setTimeout(() => this.ack(p[1], 224, supportEvents ? 0 : 5), 3);
+        /* A new subscription replays the last cached event: an old END. */
+        if (supportEvents && p[5] === 1) setTimeout(() => this.event(2, 4, 1, 7, 4, 0, 900), 20);
+        return;
+      }
+      if (p[2] === 0x02 && supportEvents){
+        setTimeout(() => this.ack(p[1], 2, 7), 5);
+        setTimeout(() => this.ack(p[1], 2, 0), 60);
+        for (const id of [1, 2]) if (links[id] === 2){
+          const op = 40 + id;
+          setTimeout(() => this.event(id, 2, 0, op, 2, 0, 1000 + id), 100);
+          setTimeout(() => this.event(id, 3, 0, op, 4, 0, 1100 + id), 200);
+          const bad = id === 2 && calFail2;
+          setTimeout(() => this.event(id, 4, bad ? 2 : 1, op, bad ? 4 : 16, bad ? 5 : 0, 1200 + id), 400);
+        }
         return;
       }
       if (p[2] === 209){ setTimeout(() => this.ack(p[1], 209, 7), 5); this.scan(p[1]); return; }
@@ -288,6 +319,32 @@ click($('btnScan')); await sleep(50); click($('btnConfirmYes'));
 await until(() => shown('mgUsb3'), 8000);
 check('every channel crowded -> USB 3.0 advice', shown('mgUsb3') && /USB 3\.0/.test(txt('mgUsb3')));
 scanBusy = { 2: 3, 50: 30, 76: 120, 24: 400 };
+
+/* ---------------------------- calibration ---------------------------- */
+check('calibration card with steps and illustration', shown('calCard') && $('calCard').querySelectorAll('.calSteps li').length === 3
+      && $('calCard').querySelector('svg.calArt') && /平放/.test(txt('calCard')));
+const nc = cmds.length;
+click($('btnCal'));
+await until(() => /失敗/.test(txt('calMsg')) || /完成/.test(txt('calMsg')), 12000);
+const calOps = cmds.slice(nc).map(c => [c.op, c.args[0]]).filter(([op]) => op !== 253);
+check('calibrate: standby tracker woken first, then subscribe, then CALIBRATE to all',
+      JSON.stringify(calOps) === JSON.stringify([[0x71, 255], [224, 1], [2, 255]]), JSON.stringify(calOps));
+check('subscription asks for calibration events from every tracker', JSON.stringify(subs[subs.length - 1]) === '[1,1,255,1]', JSON.stringify(subs));
+const chip = id => $('calList').querySelector(`[data-tid="${id}"]`);
+check('tracker 1 reported done', chip(1) && chip(1).classList.contains('ok') && /完成/.test(chip(1).textContent), chip(1) && chip(1).textContent);
+check('tracker 2 failed with the reason (old cached END ignored)', chip(2) && chip(2).classList.contains('fail') && /晃動/.test(chip(2).textContent), chip(2) && chip(2).textContent);
+check('tracker 3 (still in standby) listed as not calibrated', chip(3) && /未校正/.test(chip(3).textContent), chip(3) && chip(3).textContent);
+check('summary says 1 ok, 1 failed', /1 顆成功、1 顆失敗/.test(txt('calMsg')), txt('calMsg'));
+check('progress bar hidden afterwards', !shown('calProgress'));
+calFail2 = false;
+click($('btnCal'));
+await until(() => /全部成功/.test(txt('calMsg')), 12000);
+check('second run: all succeed', /2 顆全部成功/.test(txt('calMsg')), txt('calMsg'));
+supportEvents = false;
+click($('btnCal'));
+await until(() => /已送出校正指令/.test(txt('calMsg')), 16000);
+check('dongle without events: falls back to the light', /青色燈熄滅/.test(txt('calMsg')), txt('calMsg'));
+supportEvents = true;
 
 /* ---------------------------- update page ---------------------------- */
 await gotoPage('update');

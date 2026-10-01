@@ -6,7 +6,7 @@
  * every device - a channel change - asks first.
  */
 import { t } from './i18n.js';
-import { OP, ACK, ALL_TRACKERS, LINK } from './ota.js';
+import { OP, ACK, ALL_TRACKERS, LINK, TEV } from './ota.js';
 import { isAwake, trackerState } from './telemetry.js';
 import { log, sleep } from './util.js';
 
@@ -31,6 +31,40 @@ export const BUSY_USB3 = 500;
 export function busyText(permille){
   const pct = permille / 10;
   return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + '%';
+}
+
+/* Calibration: how long the page waits for every tracker's result. A tracker
+ * needs ~1-3 s to see it is still, 0.5 s, then 3-5 s of samples. */
+export const CAL_WAIT_MS = 20000;
+export const CAL_EXPECT_MS = 10000;     // what the progress bar is drawn over
+
+/* Reason in a failed calibration END -> text key. */
+export function calReasonKey(detail){
+  if (detail === TEV.R_MOTION) return 'calR_motion';
+  if (detail === TEV.R_TEMPERATURE) return 'calR_temp';
+  if (detail === TEV.R_BUSY) return 'calR_busy';
+  return 'calR_other';
+}
+
+/* Fold one tracker event into the per-tracker results of a calibration run.
+ * `run` = { since, targets:Set, results:Map id -> {st, why?, op?} }.
+ * Only ZRO operations a user asked for (no auto-origin bit), only targets,
+ * only after the command went out: a fresh subscription replays each
+ * tracker's last cached event, which may be an old calibration's END. */
+export function calApplyEvent(run, e, now = Date.now()){
+  if (now < run.since || e.kind !== TEV.KIND_ZRO || !run.targets.has(e.tracker)) return false;
+  const r = run.results.get(e.tracker) || { st: 'wait' };
+  if (r.st === 'ok' || r.st === 'fail') return false;
+  if (e.event === TEV.END){
+    if (r.op !== undefined && e.op !== r.op) return false;
+    run.results.set(e.tracker, e.outcome === TEV.SUCCESS ? { st: 'ok', op: e.op }
+      : { st: 'fail', op: e.op, why: calReasonKey(e.detail) });
+  } else if (e.event === TEV.REJECTED){
+    run.results.set(e.tracker, { st: 'fail', why: 'calR_busy' });
+  } else {
+    run.results.set(e.tracker, { st: 'run', op: r.op !== undefined ? r.op : e.op, phase: e.phase });
+  }
+  return true;
 }
 
 const STATE_LABEL = { awake: 'stAwake', standby: 'stStandby', off: 'stOff', asleep: 'stAsleep' };
@@ -98,7 +132,7 @@ export function createManage(ctx){
   }
 
   function setDisabled(on){
-    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff']) $(id).disabled = on;
+    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff', 'btnCal']) $(id).disabled = on;
     $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
   }
@@ -223,6 +257,115 @@ export function createManage(ctx){
     $('mgUsb3').classList.toggle('hidden', !tip);
   }
 
+  /* ---- calibration (gyro zero offset, every tracker at once) ---- */
+  let calRun = null;
+
+  function renderCal(){
+    const box = $('calList');
+    if (!calRun){ box.innerHTML = ''; box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    box.innerHTML = '';
+    const skip = new Map(calRun.skipped.map(x => [x.id, x.st]));
+    for (const id of [...calRun.targets, ...skip.keys()].sort((a, b) => a - b)){
+      const r = skip.has(id) ? { st: skip.get(id) === 'standby' ? 'skipSb' : 'skip' } : (calRun.results.get(id) || { st: 'wait' });
+      const chip = document.createElement('span');
+      chip.className = 'calChip ' + r.st;
+      chip.dataset.tid = String(id);
+      const label = r.st === 'fail' ? t('calStFail', { why: t(r.why || 'calR_none') })
+        : t({ wait: 'calStWait', run: 'calStRun', ok: 'calStOk', skip: 'calStSkip', skipSb: 'calStSkipSb' }[r.st]);
+      chip.textContent = t('otaTracker', { id }) + ' · ' + label;
+      box.appendChild(chip);
+    }
+  }
+
+  function setCalBar(frac){
+    $('calProgress').classList.toggle('hidden', frac === null);
+    if (frac !== null) $('calBar').style.width = Math.round(Math.min(1, frac) * 100) + '%';
+  }
+
+  async function calibrateAll(){
+    const d = ctx.dongle();
+    if (!d || running) return;
+    if (ctx.busy()){ say('calMsg', t('mgBusyUpdate'), true); return; }
+    running = true;
+    setDisabled(true);
+    $('calCard').classList.add('calOn');
+    let off = null, tick = null;
+    try {
+      const ids = () => [...d.seen.keys()].sort((a, b) => a - b);
+      /* A tracker in standby has its sensor stopped: wake those first. */
+      if (ids().some(id => ['standby', 'asleep'].includes(trackerState(d, id)))){
+        say('calMsg', t('calWaking'));
+        await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        await sleep(3000);
+        if (d.statusSupported) await d.queryStatus().catch(() => null);
+      }
+      const targets = ids().filter(id => trackerState(d, id) === 'awake');
+      const skipped = ids().filter(id => !targets.includes(id)).map(id => ({ id, st: trackerState(d, id) }));
+      if (!targets.length){ say('calMsg', t('calNone'), true); return; }
+
+      const events = await d.subscribeCalEvents().catch(() => false);
+      if (events) await sleep(300);             // let the replayed cache go by
+      calRun = { since: Date.now(), targets: new Set(targets), skipped, results: new Map(), events };
+      off = d.onTrackerEvent(e => { if (calApplyEvent(calRun, e)) renderCal(); });
+      renderCal();
+      say('calMsg', t('calRunning'));
+      const t0 = Date.now();
+      setCalBar(0);
+      tick = setInterval(() => setCalBar((Date.now() - t0) / CAL_EXPECT_MS), 200);
+
+      const a = await d.command(OP.CALIBRATE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      const out = ackOutcome(a, { final: true });
+      log(`calibrate all -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}, events ${events ? 'on' : 'off'}`);
+      if (out === 'busy' || out === 'noAnswer' || out === 'fail'){
+        say('calMsg', t(out === 'busy' ? 'mgBusy' : out === 'noAnswer' ? 'mgNoAnswer' : 'mgFail', { st: a && a.status }), true);
+        calRun = null;
+        return;
+      }
+
+      if (!events){
+        /* No results from this dongle: give the trackers their time, then
+         * say what the light shows. */
+        while (Date.now() - t0 < CAL_EXPECT_MS) await sleep(200);
+        say('calMsg', t('calSent'));
+        calRun = null;
+        return;
+      }
+      let renewed = false;
+      const done = () => targets.every(id => {
+        const r = calRun.results.get(id);
+        return r && (r.st === 'ok' || r.st === 'fail');
+      });
+      while (!done() && Date.now() - t0 < CAL_WAIT_MS){
+        if (!renewed && Date.now() - t0 > TEV.LEASE_MS - 5000){
+          renewed = true;
+          await d.subscribeCalEvents(TEV.RENEW).catch(() => false);
+        }
+        await sleep(200);
+      }
+      for (const id of targets){
+        const r = calRun.results.get(id);
+        if (!r || (r.st !== 'ok' && r.st !== 'fail')) calRun.results.set(id, { st: 'fail', why: 'calR_none' });
+      }
+      renderCal();
+      const ok = targets.filter(id => calRun.results.get(id).st === 'ok').length;
+      if (ok === targets.length) say('calMsg', t('calAllOk', { n: ok }));
+      else say('calMsg', t('calSomeFail', { ok, bad: targets.length - ok }), true);
+    } catch (e){
+      say('calMsg', t('mgNoAnswer'), true);
+      log('calibration failed: ' + (e && e.message), 'err');
+    } finally {
+      if (off) off();
+      clearInterval(tick);
+      setCalBar(null);
+      $('calCard').classList.remove('calOn');
+      running = false;
+      setDisabled(false);
+      renderCal();
+      render();
+    }
+  }
+
   async function scanChannels(){
     const d = ctx.dongle();
     if (!d || running) return;
@@ -301,6 +444,7 @@ export function createManage(ctx){
     if (!d) return;
     renderList(d);
     if (full || !$('chCards').children.length) renderChannels();
+    if (full) renderCal();
   }
 
   function bind(){
@@ -310,6 +454,7 @@ export function createManage(ctx){
     $('btnPairOn').onclick = () => run('mgPairMsg', OP.PAIR, [0], { final: false, ok: 'mgPairOnDone' });
     $('btnPairOff').onclick = () => run('mgPairMsg', OP.EXIT_PAIR, [], { final: false, ok: 'mgPairOffDone' });
     $('btnScan').onclick = () => scanChannels();
+    $('btnCal').onclick = () => calibrateAll();
     bindConsole();
   }
 
@@ -381,7 +526,7 @@ export function createManage(ctx){
   return {
     render,
     /* A different dongle has other surroundings: forget the last scan. */
-    reset(){ scan = null; },
+    reset(){ scan = null; calRun = null; },
     bind,
     show(){ render(true); if (!timer) timer = setInterval(() => { if (!running) render(); }, 1000); },
     hide(){ clearInterval(timer); timer = null; },

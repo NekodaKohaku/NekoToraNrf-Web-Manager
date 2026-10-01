@@ -302,6 +302,8 @@ respondAcks = true;
 /* ------------------------------ channel ------------------------------ */
 const chBtn = n => $('chCards').querySelector(`button[data-ch="${n}"]`);
 check('four rendezvous channel cards', $('chCards').children.length === 4);
+check('cards in frequency order 2, 24, 50, 76', [...$('chCards').children].map(c => c.dataset.ch).join(',') === '2,24,50,76',
+      [...$('chCards').children].map(c => c.dataset.ch).join(','));
 const n0 = user().length;
 click(chBtn(50));
 await sleep(50);

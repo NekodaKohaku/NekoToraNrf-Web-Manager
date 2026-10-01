@@ -14,6 +14,9 @@ import { log, sleep } from './util.js';
  * firmware repositories. The first is the default. */
 export const RENDEZVOUS = [76, 2, 24, 50];
 export const DEFAULT_CHANNEL = RENDEZVOUS[0];
+/* Cards in frequency order (low to high), which is how people read a band;
+ * RENDEZVOUS keeps the firmware's order, where the default comes first. */
+export const CHANNEL_CARDS = [...RENDEZVOUS].sort((a, b) => a - b);
 
 const $ = id => document.getElementById(id);
 
@@ -197,7 +200,7 @@ export function createManage(ctx){
   function renderChannels(){
     const box = $('chCards');
     box.innerHTML = '';
-    for (const n of RENDEZVOUS){
+    for (const n of CHANNEL_CARDS){
       const card = document.createElement('div');
       card.className = 'chCard';
       card.dataset.ch = String(n);

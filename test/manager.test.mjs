@@ -69,7 +69,7 @@ const dongle = {
   /* The rest of the report is registration padding, as src/hid.c fills it. */
   ack(seq, op, st, data = []){
     const f = new Uint8Array(64); f[0] = 251; f[1] = seq; f[2] = op; f[3] = st; f.set(data, 4);
-    f.set(reg(1), 16); f.set(reg(2), 32); f.set(reg(3), 48);
+    f.set(pad(1), 16); f.set(pad(2), 32); f.set(pad(3), 48);
     this.emit(f);
   },
   status(seq){
@@ -82,7 +82,7 @@ const dongle = {
     nonce += 10000 * (++this.runs);     // every event its own nonce, as on a tracker
     const f = new Uint8Array(64);
     f.set([251, 0, 225, ev | (outcome << 4), tid, nonce & 255, (nonce >> 8) & 255, 0, 0, ev, 0, op & 255, op >> 8, 1, phase, detail]);
-    f.set(reg(1), 16); f.set(reg(2), 32); f.set(reg(3), 48);
+    f.set(pad(1), 16); f.set(pad(2), 32); f.set(pad(3), 48);
     this.emit(f);
     this.emit(f);                       // the dongle repeats events
   },
@@ -139,6 +139,18 @@ const dongle = {
         for (const id of [1, 2]) if (all || p[4] === id) links[id] = on ? 2 : 1;
         streaming = links[1] === 2;
       }
+      if (p[2] === 250){
+        const id = p[4];
+        const st = !supportRemove ? 1 : registered.has(id) ? 0 : 4;
+        if (st === 0){ registered.delete(id); links[id] = 0; }
+        setTimeout(() => this.ack(p[1], 250, st), 3);
+        return;
+      }
+      if (p[2] === 0x08){                 // tracker drops its pairing: never confirms
+        setTimeout(() => this.ack(p[1], 8, 7), 5);
+        setTimeout(() => this.ack(p[1], 8, 4), 80);
+        return;
+      }
       if (p[2] === 218) channel = p[4];
       if (p[2] === 219) channel = 76;
       const tracker = p[2] >= 1 && p[2] <= 200;
@@ -165,14 +177,21 @@ function reg(id){
   s[0] = 255; s[1] = id; s.set([0x11, 0x22, 0x33, 0x44, 0x55, 0x60 + id], 2);
   return s;
 }
+/* What the dongle still has paired: registrations stop for a removed id. */
+const registered = new Set([1, 2, 3]);
+let supportRemove = true;
+function pad(id){
+  if (registered.has(id)) return reg(id);
+  const s = new Uint8Array(16); s[0] = 0xF8; return s;
+}
 let battery2 = 10, charging2 = false;
 setInterval(() => {
   if (!dongle.opened || !streaming) return;
   const f = new Uint8Array(64);
   f.set(info(1, 85, 145, 52), 0);
-  f.set(info(2, battery2, charging2 ? 190 : 125, 60), 16);
-  f.set(reg(3), 32);
-  f.set(reg(1), 48);
+  f.set(registered.has(2) ? info(2, battery2, charging2 ? 190 : 125, 60) : pad(2), 16);
+  f.set(pad(3), 32);
+  f.set(pad(1), 48);
   dongle.emit(f);
 }, 20).unref();
 
@@ -392,6 +411,63 @@ click($('btnDiagMake'));
 await sleep(50);
 check('report lists the trackers with battery', /#1 .*battery 85%/.test(txt('diagOut')) && /#3 .*standby/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
 check('report has the dongle status line', /dongle status: channel 76/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
+
+/* ------------------------- reset and remove -------------------------- */
+await gotoPage('manage');
+const rsOpts = () => [...$('rsTarget').options].map(o => o.value);
+await until(() => rsOpts().length === 4);
+check('reset target list: all + three trackers', JSON.stringify(rsOpts()) === '["all","1","2","3"]', JSON.stringify(rsOpts()));
+check('remove disabled while "all" is selected', $('btnRsRemove').disabled && !$('btnRsCal').disabled);
+// clear calibration on all
+let n0r = cmds.length;
+click($('btnRsCal'));
+await sleep(50);
+check('clear calibration asks first (no tick box)', shown('confirmOverlay') && !shown('confirmAckRow'));
+click($('btnConfirmYes'));
+await until(() => /已清除 3 顆/.test(txt('rsMsg')), 15000);
+const calR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
+const perT = id => calR.filter(([, a]) => a === id).map(([op]) => op);
+check('clear calibration: four resets per tracker, pairing untouched',
+      JSON.stringify(perT(1)) === '[14,15,13,18]' && JSON.stringify(perT(3)) === '[14,15,13,18]' && !calR.some(([op]) => op === 8 || op === 250), JSON.stringify(calR));
+// factory reset tracker 2
+$('rsTarget').value = '2'; $('rsTarget').dispatchEvent(new window.Event('change'));
+check('single tracker: remove enabled', !$('btnRsRemove').disabled);
+n0r = cmds.length;
+click($('btnRsFactory'));
+await sleep(50);
+check('factory reset needs the tick box', shown('confirmAckRow') && $('btnConfirmYes').disabled && $('btnConfirmYes').classList.contains('danger'));
+$('confirmAck').checked = true; $('confirmAck').dispatchEvent(new window.Event('change'));
+check('...ticking enables confirm', !$('btnConfirmYes').disabled);
+click($('btnConfirmYes'));
+await until(() => /已回復出廠/.test(txt('rsMsg')), 15000);
+const facR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
+check('factory reset: resets + battery, then pairing, then remove from dongle',
+      JSON.stringify(facR) === JSON.stringify([[14, 2], [15, 2], [13, 2], [18, 2], [16, 2], [8, 2], [250, 2]]), JSON.stringify(facR));
+check('re-pair guide shown', shown('rsRepair'));
+await until(() => !rsOpts().includes('2'));
+check('tracker 2 gone from lists', !rsOpts().includes('2') && !$('mgList').querySelector('[data-tid="2"]'));
+// remove tracker 3 (in standby, would work even when off)
+links[3] = 0;
+await until(() => /關機/.test(([...$('rsTarget').options].find(o => o.value === '3') || {}).textContent || ''), 4000);
+$('rsTarget').value = '3'; $('rsTarget').dispatchEvent(new window.Event('change'));
+check('off tracker: only remove is possible, with a note', $('btnRsCal').disabled && $('btnRsFactory').disabled && !$('btnRsRemove').disabled && shown('rsNote'));
+n0r = cmds.length;
+click($('btnRsRemove')); await sleep(50);
+$('confirmAck').checked = true; $('confirmAck').dispatchEvent(new window.Event('change'));
+click($('btnConfirmYes'));
+await until(() => /已從 Dongle 移除追蹤器 3/.test(txt('rsMsg')), 4000);
+const remR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
+check('remove: one REMOVE_ID, nothing sent to the tracker', JSON.stringify(remR) === '[[250,3]]', JSON.stringify(remR));
+check('tracker 3 gone', !rsOpts().includes('3') && !$('mgList').querySelector('[data-tid="3"]'));
+// old dongle
+supportRemove = false; registered.add(3); links[3] = 1;
+await until(() => rsOpts().includes('3'), 4000);
+$('rsTarget').value = '3'; $('rsTarget').dispatchEvent(new window.Event('change'));
+click($('btnRsRemove')); await sleep(50);
+$('confirmAck').checked = true; $('confirmAck').dispatchEvent(new window.Event('change'));
+click($('btnConfirmYes'));
+await until(() => /新版 Dongle 韌體/.test(txt('rsMsg')), 4000);
+check('old dongle: explains remove needs newer firmware', /新版 Dongle 韌體/.test(txt('rsMsg')) && rsOpts().includes('3'));
 
 /* --------------------------- older dongle ---------------------------- */
 supportStatus = false;

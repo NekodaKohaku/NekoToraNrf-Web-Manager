@@ -1152,14 +1152,24 @@ function go(name){
 }
 
 /* Confirmation as a plain overlay: resolves true on OK, false otherwise. */
-function confirmBox(title, text){
+/* opts.danger: red confirm button. opts.ack: a sentence the user has to
+ * tick before the confirm button works - for actions that need re-pairing. */
+function confirmBox(title, text, opts = {}){
   return new Promise(resolve => {
     $('confirmTitle').textContent = title;
     $('confirmText').textContent = text;
+    const yes = $('btnConfirmYes');
+    yes.className = 'btn ' + (opts.danger ? 'danger' : 'primary');
+    $('confirmAckRow').classList.toggle('hidden', !opts.ack);
+    $('confirmAck').checked = false;
+    $('confirmAckText').textContent = opts.ack || '';
+    yes.disabled = !!opts.ack;
+    $('confirmAck').onchange = () => { yes.disabled = !$('confirmAck').checked; };
     $('confirmOverlay').classList.remove('hidden');
     const done = v => {
       $('confirmOverlay').classList.add('hidden');
-      $('btnConfirmYes').onclick = $('btnConfirmNo').onclick = null;
+      yes.onclick = $('btnConfirmNo').onclick = $('confirmAck').onchange = null;
+      yes.disabled = false;
       resolve(v);
     };
     $('btnConfirmYes').onclick = () => done(true);

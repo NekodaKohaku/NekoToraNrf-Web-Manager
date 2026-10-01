@@ -132,7 +132,8 @@ export function createManage(ctx){
   }
 
   function setDisabled(on){
-    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff', 'btnCal']) $(id).disabled = on;
+    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
+    if (on) for (const id of ['btnRsCal', 'btnRsFactory', 'btnRsRemove']) $(id).disabled = true;
     $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
   }
@@ -188,6 +189,7 @@ export function createManage(ctx){
       : t('mgSummary', { a: count.awake, b: ids.length - count.awake });
     $('mgOldDongle').classList.toggle('hidden', d.statusSupported !== false);
     renderChannelState(d);
+    renderResetTargets(d, now);
   }
 
   /* Cards are built once (full render) and their state - current, scan
@@ -366,6 +368,193 @@ export function createManage(ctx){
     }
   }
 
+  /* ---- reset: clear calibration, factory reset, remove from dongle ---- */
+  let rsRun = null;            // { order:[id], res: Map id -> {st, why?} }
+
+  const RS_CAL_OPS = [OP.RESET_ZRO, OP.RESET_ACC, OP.SENS_RESET, OP.RESET_TCAL];
+
+  function rsSelected(){
+    const v = $('rsTarget').value;
+    return v === 'all' || v === '' ? 'all' : Number(v);
+  }
+
+  /* Options are kept in place (the list refreshes every second and a
+   * rebuilt <select> would close under the pointer). */
+  function renderResetTargets(d, now = Date.now()){
+    const sel = $('rsTarget');
+    const ids = [...d.seen.keys()].sort((a, b) => a - b);
+    const want = ['all', ...ids.map(String)];
+    for (const o of [...sel.options]) if (!want.includes(o.value)) o.remove();
+    want.forEach((v, i) => {
+      let o = [...sel.options].find(x => x.value === v);
+      if (!o){ o = document.createElement('option'); o.value = v; sel.insertBefore(o, sel.options[i] || null); }
+      o.textContent = v === 'all' ? t('rsAll')
+        : t('otaTracker', { id: Number(v) }) + ' · ' + stateLabel(trackerState(d, Number(v), now));
+    });
+    if (!want.includes(sel.value)) sel.value = 'all';
+    renderResetButtons(d, now);
+  }
+
+  function renderResetButtons(d, now = Date.now()){
+    if (running) return;
+    const target = rsSelected();
+    const reachable = id => trackerState(d, id, now) !== 'off';
+    let note = '';
+    let canCal, canRemove;
+    if (target === 'all'){
+      canCal = [...d.seen.keys()].some(reachable);
+      canRemove = false;
+      if (!canCal && d.seen.size) note = t('rsNeedOn');
+    } else {
+      canCal = reachable(target);
+      canRemove = d.removeSupported !== false;
+      if (!canCal) note = t('rsNeedOnOne');
+      else if (d.removeSupported === false) note = t('rsOldDongle');
+    }
+    $('btnRsCal').disabled = !canCal;
+    $('btnRsFactory').disabled = !canCal;
+    $('btnRsRemove').disabled = !canRemove;
+    $('btnRsRemove').title = target === 'all' ? t('rsRemoveOneOnly') : '';
+    $('rsNote').textContent = note;
+    $('rsNote').classList.toggle('hidden', !note);
+  }
+
+  function renderResetList(){
+    const box = $('rsList');
+    if (!rsRun){ box.innerHTML = ''; box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    box.innerHTML = '';
+    for (const id of rsRun.order){
+      const r = rsRun.res.get(id) || { st: 'wait' };
+      const chip = document.createElement('span');
+      chip.className = 'calChip ' + r.st;
+      chip.dataset.tid = String(id);
+      const label = r.st === 'fail' ? t('calStFail', { why: t(r.why) })
+        : t({ wait: 'calStWait', run: 'rsStRun', ok: 'calStOk', skip: 'rsStSkip', warn: r.why }[r.st] || 'calStOk');
+      chip.textContent = t('otaTracker', { id }) + ' · ' + label;
+      box.appendChild(chip);
+    }
+  }
+
+  /* Wake trackers in standby among `ids` (their sensors are stopped and some
+   * resets touch the sensor state), then return those reachable now. */
+  async function rsPrepare(d, ids){
+    if (ids.some(id => ['standby', 'asleep'].includes(trackerState(d, id)))){
+      say('rsMsg', t('calWaking'));
+      await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      await sleep(3000);
+      if (d.statusSupported) await d.queryStatus().catch(() => null);
+    }
+  }
+
+  async function rsSend(d, op, args, finalMs = 4000){
+    const a = await d.command(op, args, { final: true, finalMs });
+    return ackOutcome(a, { final: true });
+  }
+
+  async function resetAction(kind){
+    const d = ctx.dongle();
+    if (!d || running) return;
+    if (ctx.busy()){ say('rsMsg', t('mgBusyUpdate'), true); return; }
+    const target = rsSelected();
+    const ids = target === 'all' ? [...d.seen.keys()].sort((a, b) => a - b) : [target];
+    const who = target === 'all' ? t('rsAllShort') : t('otaTracker', { id: target });
+    const ok = kind === 'cal'
+      ? await ctx.confirm(t('rsCalConfirmT', { who }), t('rsCalConfirm'))
+      : kind === 'factory'
+        ? await ctx.confirm(t('rsFactoryConfirmT', { who }), t('rsFactoryConfirm'), { danger: true, ack: t('rsAck') })
+        : await ctx.confirm(t('rsRemoveConfirmT', { who }), t('rsRemoveConfirm'), { danger: true, ack: t('rsAck') });
+    if (!ok) return;
+    running = true;
+    setDisabled(true);
+    $('rsRepair').classList.add('hidden');
+    try {
+      if (kind === 'remove'){
+        rsRun = null; renderResetList();
+        say('rsMsg', t('mgSending'));
+        const a = await d.command(OP.REMOVE_ID, [target], { timeoutMs: 1500 });
+        log(`remove id ${target} -> ${a ? a.status : 'none'}`);
+        if (a && a.status === ACK.OK){
+          d.removeSupported = true;
+          d.seen.delete(target);
+          say('rsMsg', t('rsRemoved', { id: target }));
+        } else if (a && a.status === ACK.ENOENT){
+          d.removeSupported = true;
+          d.seen.delete(target);
+          say('rsMsg', t('rsRemoveGone', { id: target }));
+        } else if (a && a.status === ACK.EINVAL){
+          d.removeSupported = false;
+          say('rsMsg', t('rsOldDongle'), true);
+        } else {
+          say('rsMsg', t('mgNoAnswer'), true);
+        }
+        return;
+      }
+
+      await rsPrepare(d, ids);
+      const live = ids.filter(id => trackerState(d, id) !== 'off');
+      rsRun = { order: ids, res: new Map(ids.filter(id => !live.includes(id)).map(id => [id, { st: 'skip' }])) };
+      renderResetList();
+      say('rsMsg', t('rsWorking'));
+      let done = 0, removedOld = false;
+      for (const id of live){
+        rsRun.res.set(id, { st: 'run' }); renderResetList();
+        const ops = kind === 'factory' ? [...RS_CAL_OPS, OP.RESET_BAT] : RS_CAL_OPS;
+        let failed = false;
+        for (const op of ops){
+          const out = await rsSend(d, op, [id]);
+          log(`reset op=${op} id=${id} -> ${out}`);
+          if (out !== 'ok'){ failed = true; break; }
+        }
+        if (failed){
+          rsRun.res.set(id, { st: 'fail', why: 'rsR_noAnswer' }); renderResetList();
+          continue;
+        }
+        if (kind === 'factory'){
+          /* Pairing last: after this the tracker no longer takes commands,
+           * so it may never confirm - the dongle stops waiting (partial). */
+          const out = await rsSend(d, OP.CLEAR_PAIR, [id], 6000);
+          log(`clear pairing id=${id} -> ${out}`);
+          if (out === 'busy' || out === 'noAnswer'){
+            rsRun.res.set(id, { st: 'fail', why: 'rsR_noAnswer' }); renderResetList();
+            continue;
+          }
+          const a = await d.command(OP.REMOVE_ID, [id], { timeoutMs: 1500 });
+          log(`remove id ${id} -> ${a ? a.status : 'none'}`);
+          if (a && (a.status === ACK.OK || a.status === ACK.ENOENT)){
+            d.removeSupported = true;
+            d.seen.delete(id);
+            rsRun.res.set(id, { st: 'ok' });
+          } else {
+            if (a && a.status === ACK.EINVAL) d.removeSupported = false;
+            removedOld = true;
+            rsRun.res.set(id, { st: 'warn', why: 'rsStNotRemoved' });
+          }
+        } else {
+          rsRun.res.set(id, { st: 'ok' });
+        }
+        done++;
+        renderResetList();
+      }
+      const failedN = live.length - done;
+      if (kind === 'cal'){
+        say('rsMsg', failedN ? t('rsCalSome', { ok: done, bad: failedN }) : t('rsCalDone', { n: done }), !!failedN);
+      } else {
+        say('rsMsg', (failedN ? t('rsFactorySome', { ok: done, bad: failedN }) : t('rsFactoryDone', { n: done }))
+          + (removedOld ? ' ' + t('rsOldDongle') : ''), !!failedN);
+        if (done) $('rsRepair').classList.remove('hidden');
+      }
+    } catch (e){
+      say('rsMsg', t('mgNoAnswer'), true);
+      log('reset failed: ' + (e && e.message), 'err');
+    } finally {
+      running = false;
+      setDisabled(false);
+      renderResetList();
+      render();
+    }
+  }
+
   async function scanChannels(){
     const d = ctx.dongle();
     if (!d || running) return;
@@ -444,7 +633,7 @@ export function createManage(ctx){
     if (!d) return;
     renderList(d);
     if (full || !$('chCards').children.length) renderChannels();
-    if (full) renderCal();
+    if (full){ renderCal(); renderResetList(); }
   }
 
   function bind(){
@@ -455,6 +644,11 @@ export function createManage(ctx){
     $('btnPairOff').onclick = () => run('mgPairMsg', OP.EXIT_PAIR, [], { final: false, ok: 'mgPairOffDone' });
     $('btnScan').onclick = () => scanChannels();
     $('btnCal').onclick = () => calibrateAll();
+    $('rsTarget').onchange = () => { const d = ctx.dongle(); if (d) renderResetButtons(d); };
+    $('btnRsCal').onclick = () => resetAction('cal');
+    $('btnRsFactory').onclick = () => resetAction('factory');
+    $('btnRsRemove').onclick = () => resetAction('remove');
+    $('btnRsPair').onclick = () => run('rsMsg', OP.PAIR, [0], { final: false, ok: 'rsPairOn' });
     bindConsole();
   }
 
@@ -526,7 +720,7 @@ export function createManage(ctx){
   return {
     render,
     /* A different dongle has other surroundings: forget the last scan. */
-    reset(){ scan = null; calRun = null; },
+    reset(){ scan = null; calRun = null; rsRun = null; },
     bind,
     show(){ render(true); if (!timer) timer = setInterval(() => { if (!running) render(); }, 1000); },
     hide(){ clearInterval(timer); timer = null; },

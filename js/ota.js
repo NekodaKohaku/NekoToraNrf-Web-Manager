@@ -60,6 +60,11 @@ export const OP = {
   RSSI_RESULT: 252, STATUS: 253,
   // tracker remote: ZRO calibration (ESB_PONG_FLAG_CALIBRATE)
   CALIBRATE: 0x02,
+  // tracker remote resets (ESB_PONG_FLAG_*)
+  CLEAR_PAIR: 0x08, SENS_RESET: 0x0D, RESET_ZRO: 0x0E, RESET_ACC: 0x0F,
+  RESET_BAT: 0x10, RESET_TCAL: 0x12,
+  // dongle: forget one tracker by id, other ids unchanged (NekoTora receiver)
+  REMOVE_ID: 250,
   // tracker events (receiver tracker_event_protocol.h): subscribe, then
   // TRACKER_EVENT records arrive unasked
   TRACKER_EVENTS: 224, TRACKER_EVENT: 225,

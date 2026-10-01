@@ -101,6 +101,7 @@ const dongle = {
       f[0] = HID.FW_INFO; f[1] = tid; f[2] = c;
       const off = 2 + c * 13;
       f.set(info.subarray(off, Math.min(66, off + 13)), 3);
+      f.set(pad(1), 16); f.set(pad(2), 32); f.set(pad(3), 48);   // the dongle pads reports
       setTimeout(() => this.emit(f), 2 + c);
     }
   },
@@ -161,7 +162,7 @@ const dongle = {
     }
     if (p[0] === HID.QUERY_INFO){
       if (p[1] === DONGLE_ID) this.fwInfo(DONGLE_ID, [1, 0, 0], 1, 'promicro_uf2/nrf52840');
-      else if (p[1] === 1 || p[1] === 2) this.fwInfo(p[1], [1, 0, 0], 3, BOARD);
+      else if (p[1] === 1 || p[1] === 2 || (p[1] === 3 && awake3)) this.fwInfo(p[1], [1, 0, 0], 3, BOARD);
     }
   },
 };
@@ -185,12 +186,13 @@ function pad(id){
   const s = new Uint8Array(16); s[0] = 0xF8; return s;
 }
 let battery2 = 10, charging2 = false;
+let awake3 = false;           // tracker 3 switched on after the scan
 setInterval(() => {
   if (!dongle.opened || !streaming) return;
   const f = new Uint8Array(64);
   f.set(info(1, 85, 145, 52), 0);
   f.set(registered.has(2) ? info(2, battery2, charging2 ? 190 : 125, 60) : pad(2), 16);
-  f.set(pad(3), 32);
+  f.set(awake3 ? info(3, 70, 140, 55) : pad(3), 32);
   f.set(pad(1), 48);
   dongle.emit(f);
 }, 20).unref();
@@ -392,6 +394,17 @@ async function pick(bytes, name){
   await sleep(150);
 }
 await until(() => !shown('otaNote') || !/重新檢查/.test(txt('otaNote')), 8000);
+
+/* ------------------------ live update list -------------------------- */
+const box3 = () => trow(3) && trow(3).querySelector('input');
+check('tracker 3 starts not selectable (standby)', box3() && box3().disabled, trow(3) && trow(3).textContent);
+awake3 = true; links[3] = 2;
+await until(() => box3() && !box3().disabled, 12000);
+check('tracker switched on after the scan becomes selectable on its own', box3() && !box3().disabled, trow(3) && trow(3).textContent);
+check('...its version was read and, being outdated, it is ticked', /1\.0\.0/.test(trow(3).textContent) && box3().checked, trow(3).textContent);
+awake3 = false; links[3] = 1;
+await until(() => box3() && box3().disabled, 12000);
+check('tracker going to standby is unticked and greyed out', box3() && box3().disabled && !box3().checked && /待機/.test(trow(3).textContent), trow(3) && trow(3).textContent);
 const enc = s => new TextEncoder().encode(s);
 await pick(enc(toHex([[0x1000, new Uint8Array(256).fill(7)]])), 'dongle.hex');
 check('dongle hex recognised and offered on the dongle row', /dongle\.hex/.test(txt('dongleList')) && $('dongleList').querySelector('input').checked, txt('dongleList'));

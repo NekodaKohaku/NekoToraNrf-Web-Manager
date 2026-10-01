@@ -694,6 +694,7 @@ async function queryDongle(){
 async function scanTrackers(){
   if (!state.ota) return;
   state.busy = true;
+  await liveIdle();
   $('otaNote').classList.remove('hidden');
   $('otaNote').textContent = t('otaScanning');
   gate();
@@ -794,6 +795,7 @@ async function start(){
   if (!readyToStart() || state.busy) return;
   state.busy = true;
   state.updating = true;
+  await liveIdle();
   gate();
   showView('progress');
   setBar(0);
@@ -1177,6 +1179,85 @@ function confirmBox(title, text, opts = {}){
   });
 }
 
+/* ---- live update list ----
+ * The list starts from the scan at connect time; this keeps it current
+ * while the page is open: a tracker that wakes or is switched on gets its
+ * version read and becomes selectable, one that goes to standby or off is
+ * unticked, a newly paired one is added, a removed one dropped. Nothing
+ * here runs while a scan or an update owns the link, and an in-flight
+ * version query is awaited before either starts (queryInfo drains the
+ * shared report queue). Radio cost: one version query per tracker that
+ * comes online - the rest is read from traffic the page already receives. */
+const LIVE_OFF_MS = 4000;          // quiet this long before a tracker counts as gone
+const LIVE_RETRY_MS = 10000;       // after a version query got no answer
+let livePromise = null;
+
+function liveIdle(){ return livePromise || Promise.resolve(); }
+
+function liveSync(){
+  const d = state.dongle;
+  if (!d || !state.ota || state.busy || state.updating || state.method !== 'ota') return false;
+  const now = Date.now();
+  let changed = false;
+  for (const id of state.trackers.keys()){
+    if (!d.seen.has(id)){ state.trackers.delete(id); state.selected.delete(id); changed = true; }
+  }
+  for (const [id, e] of d.seen){
+    let tk = state.trackers.get(id);
+    if (!tk){
+      tk = { addr: e.addr || '', online: false, info: null, querying: false };
+      state.trackers.set(id, tk);
+      changed = true;
+    }
+    if (e.addr && !tk.addr) tk.addr = e.addr;
+    const awake = trackerState(d, id, now) === 'awake';
+    if (awake){
+      tk.quietSince = 0;
+      if (!tk.online){
+        tk.online = true;
+        tk.fresh = true;            // came online after the scan: may be auto-ticked
+        changed = true;
+      }
+    } else if (tk.online && !tk.querying){
+      if (!tk.quietSince) tk.quietSince = now;
+      else if (now - tk.quietSince > LIVE_OFF_MS){
+        tk.online = false;
+        tk.quietSince = 0;
+        state.selected.delete(id);
+        changed = true;
+      }
+    }
+  }
+  if (!livePromise){
+    const next = [...state.trackers].find(([, tk]) =>
+      tk.online && !tk.info && !tk.querying && now >= (tk.retryAt || 0));
+    if (next) livePromise = liveQuery(next[0], next[1]).finally(() => { livePromise = null; });
+  }
+  return changed;
+}
+
+async function liveQuery(id, tk){
+  tk.querying = true;
+  renderTrackers();
+  let info = null;
+  try { info = await state.ota.queryInfo(id, 4000); } catch (_) { info = null; }
+  tk.querying = false;
+  if (!state.trackers.has(id)) return;
+  if (!info){
+    tk.retryAt = Date.now() + LIVE_RETRY_MS;
+  } else {
+    tk.info = info;
+    log(`tracker ${id} came online: ${info.version} (${info.boardTarget})`);
+    const want = state.manifest && state.manifest.boardTarget;
+    if (tk.fresh && state.manifest && !state.manualFw && (!want || info.boardTarget === want)
+        && !trackerBatteryBlock(id) && info.versionCode < state.manifest.versionCode){
+      state.selected.add(id);
+    }
+  }
+  tk.fresh = false;
+  if (state.page === 'update'){ renderTrackers(); gate(); }
+}
+
 let statusInFlight = false;
 async function pollStatus(){
   const d = state.dongle;
@@ -1375,11 +1456,12 @@ async function init(){
     if (state.page === 'manage' || (state.page === 'update' && state.method === 'ota')) pollStatus();
   }, 1500);
 
-  /* Battery and signal keep changing; keep the update list current while it
-   * is on screen and nothing is running. */
+  /* Battery, signal and who is online keep changing; keep the update list
+   * current while it is on screen and nothing is running (see liveSync). */
   setInterval(() => {
-    if (state.page === 'update' && state.method === 'ota' && state.dongle && !state.busy && state.trackers.size){
-      renderTrackers(); gate();
+    if (state.page === 'update' && state.method === 'ota' && state.dongle && !state.busy){
+      liveSync();
+      if (state.trackers.size){ renderTrackers(); gate(); }
     }
   }, 2000);
 }

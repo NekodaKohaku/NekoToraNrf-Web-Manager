@@ -132,7 +132,7 @@ export function createManage(ctx){
   }
 
   function setDisabled(on){
-    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
+    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnOffAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
     if (on) for (const id of ['btnRsCal', 'btnRsFactory', 'btnRsRemove']) $(id).disabled = true;
     $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
@@ -640,6 +640,12 @@ export function createManage(ctx){
     $('btnManageConnect').onclick = () => ctx.connect();
     $('btnDozeAll').onclick = () => run('mgMsg', OP.DOZE, [ALL_TRACKERS]);
     $('btnWakeAll').onclick = () => run('mgMsg', OP.WAKE, [ALL_TRACKERS]);
+    /* Off is not standby: nothing wakes a tracker from it but its own button. */
+    $('btnOffAll').onclick = async () => {
+      if (!ctx.dongle() || running) return;
+      if (!(await ctx.confirm(t('mgOffConfirmT'), t('mgOffConfirm'), { danger: true }))) return;
+      run('mgMsg', OP.SHUTDOWN, [ALL_TRACKERS], { ok: 'mgOffDone' });
+    };
     $('btnPairOn').onclick = () => run('mgPairMsg', OP.PAIR, [0], { final: false, ok: 'mgPairOnDone' });
     $('btnPairOff').onclick = () => run('mgPairMsg', OP.EXIT_PAIR, [], { final: false, ok: 'mgPairOffDone' });
     $('btnScan').onclick = () => scanChannels();

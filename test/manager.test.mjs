@@ -272,6 +272,15 @@ check('seq clear of 0x55 and the 0..127 range', last().seq >= 128 && last().seq 
 click($('btnWakeAll'));
 await until(() => last().op === 0x71 && /完成/.test(txt('mgMsg')));
 check('wake all -> 0x71 to all', last().op === 0x71 && last().args[0] === 0xFF);
+const nOff = user().length;
+click($('btnOffAll'));
+await sleep(50);
+check('power off all asks first, in red', shown('confirmOverlay') && $('btnConfirmYes').classList.contains('danger') && /全部待機/.test(txt('confirmText')));
+click($('btnConfirmNo')); await sleep(30);
+check('...cancel sends nothing', user().length === nOff);
+click($('btnOffAll')); await sleep(50); click($('btnConfirmYes'));
+await until(() => /已送出關機/.test(txt('mgMsg')));
+check('power off all -> SHUTDOWN (0x01) to all', last().op === 0x01 && last().args[0] === 0xFF, JSON.stringify(last()));
 click(row(1).querySelector('button'));
 await until(() => /閃白燈/.test(txt('mgMsg')));
 check('find -> PING 0x11 to tracker 1', last().op === 0x11 && last().args[0] === 1, JSON.stringify(last()));

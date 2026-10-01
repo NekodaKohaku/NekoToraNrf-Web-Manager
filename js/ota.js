@@ -58,8 +58,8 @@ export const OP = {
   PAIR: 201, EXIT_PAIR: 202, RSSI_SCAN: 209, DFU: RCV_HID_OP_DFU, TRACKER_CH_ALL: 218, TRACKER_CH_CLR: 219,
   // NekoTora additions (receiver rcv_hid_cmd.h): RSSI_RESULT is IN only
   RSSI_RESULT: 252, STATUS: 253,
-  // tracker remote: ZRO calibration (ESB_PONG_FLAG_CALIBRATE)
-  CALIBRATE: 0x02,
+  // tracker remote: power off (ESB_PONG_FLAG_SHUTDOWN), ZRO calibration
+  SHUTDOWN: 0x01, CALIBRATE: 0x02,
   // tracker remote resets (ESB_PONG_FLAG_*)
   CLEAR_PAIR: 0x08, SENS_RESET: 0x0D, RESET_ZRO: 0x0E, RESET_ACC: 0x0F,
   RESET_BAT: 0x10, RESET_TCAL: 0x12,

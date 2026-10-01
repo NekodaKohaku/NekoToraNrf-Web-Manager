@@ -58,6 +58,11 @@ main{max-width:820px;margin:0 auto;padding:8px 20px 48px}
 .btn.primary:disabled{background:var(--border);color:var(--muted);cursor:not-allowed}
 .btn.big{width:100%;padding:14px;font-size:16px}
 .btn.alt{background:var(--border);color:var(--text)}
+.btn.good{background:var(--ok);color:#fff}
+.btn.good:hover{filter:brightness(.92)}
+.btn.good:disabled{background:var(--border);color:var(--muted);cursor:not-allowed;filter:none}
+/* A little apart from standby/wake: the one that cannot be undone from here. */
+.btn.offAll{margin-left:auto}
 .btn.danger{background:var(--err);color:#fff}
 .btn.danger:hover{filter:brightness(.92)}
 .btn.danger:disabled,.btn.alt:disabled{background:var(--border);color:var(--muted);cursor:not-allowed;filter:none}
@@ -445,8 +450,8 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
       <p class="desc" data-i18n="mgTrackersDesc"></p>
       <div class="row">
         <button id="btnDozeAll" class="btn primary" data-i18n="mgDozeAll"></button>
-        <button id="btnWakeAll" class="btn alt" data-i18n="mgWakeAll"></button>
-        <button id="btnOffAll" class="btn alt" data-i18n="mgOffAll"></button>
+        <button id="btnWakeAll" class="btn good" data-i18n="mgWakeAll"></button>
+        <button id="btnOffAll" class="btn danger offAll" data-i18n="mgOffAll"></button>
       </div>
       <p id="mgMsg" class="desc hidden" style="margin-top:10px"></p>
       <div class="trackers" id="mgList" style="margin-top:12px"></div>

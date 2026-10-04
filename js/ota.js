@@ -523,6 +523,26 @@ export class OtaClient {
    * Returns {ok:[ids], failed:[{id, error}]}.
    */
   async update(trackerIds, image, boardTarget, onEvent = () => {}){
+    /* The dongle's relay session ends only when every target has reported a
+     * terminal status or an abort arrives. A target that goes quiet - no
+     * answer to BEGIN, VERIFY or ACTIVATE, or a page that was closed halfway -
+     * stays registered, and for as long as it does the dongle keeps every
+     * other tracker slowed down to make room for an update nobody is
+     * running. So: clear whatever an earlier run left behind before
+     * starting, and close the session here whenever this run did not end
+     * with every tracker confirmed. */
+    await this.d.abort(0xFF).catch(() => {});
+    await sleep(100);
+    let res = null;
+    try {
+      res = await this._update(trackerIds, image, boardTarget, onEvent);
+      return res;
+    } finally {
+      if (!res || res.failed.length) await this.d.abort(0xFF).catch(() => {});
+    }
+  }
+
+  async _update(trackerIds, image, boardTarget, onEvent){
     const size = image.data.length;
     const total = Math.ceil(size / DATA_MAX_PAYLOAD);
     const imageCrc = image.crc32 !== undefined ? image.crc32 : crc32(image.data);

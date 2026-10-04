@@ -4,7 +4,14 @@ import { crc32 } from '../js/util.js';
 /* Emulates the dongle + one or more trackers well enough to exercise the
  * client's sequencing: BEGIN answered only after an erase delay, DATA consumed
  * in order with an optional drop rate, VERIFY gated on the CRC actually
- * matching, ACTIVATE completing. */
+ * matching, ACTIVATE completing.
+ *
+ * It also keeps the relay session the way the dongle does (esb_ota.c): BEGIN
+ * registers a target, and only a terminal status from that tracker or an
+ * ABORT removes it. While any target is registered the real dongle keeps
+ * every other tracker slowed down, so a run must never leave one behind. */
+const TERMINAL_ST = new Set([ST.COMPLETE, ST.ERROR, ST.VERIFY_FAIL, ST.TIMEOUT,
+  ST.BOARD_MISMATCH, ST.SIZE_ERROR, ST.FLASH_ERROR, ST.SEQ_ERROR]);
 class FakeDevice {
   constructor(opts = {}){
     this.opened = true;
@@ -12,6 +19,7 @@ class FakeDevice {
     this.listeners = [];
     this.o = Object.assign({ trackers: [4], eraseMs: 300, dropRate: 0, board: 'promicro_uf2/nrf52840/spi' }, opts);
     this.st = new Map(this.o.trackers.map(id => [id, { next: 0, buf: [], ready: false, size: 0, crc: 0 }]));
+    this.targets = new Set(this.o.staleTargets || []);   // left over from a run that never finished
     // Trackers report progress periodically, which is what unblocks the
     // client when its in-flight window is full.
     this.progress = setInterval(() => {
@@ -38,12 +46,16 @@ class FakeDevice {
     const s = this.st.get(id); const f = new Uint8Array(64); const dv = new DataView(f.buffer);
     f[0] = HID.STATUS; f[1] = id; f[2] = status;
     dv.setUint16(3, s.next, false); dv.setUint32(5, s.buf.length, true); f[9] = 0;
+    if (TERMINAL_ST.has(status)) this.targets.delete(id);
     this._in(f);
   }
   async sendReport(_, data){
     const p = new Uint8Array(data); const dv = new DataView(p.buffer);
     const type = p[0], id = p[1];
-    if (type === HID.BEGIN){
+    if (type === HID.ABORT){
+      if (id === 0xFF) this.targets.clear(); else this.targets.delete(id);
+    } else if (type === HID.BEGIN){
+      this.targets.add(id);
       const s = this.st.get(id); if (!s) return;
       s.size = dv.getUint32(2, true); s.crc = dv.getUint32(6, true);
       const board = new TextDecoder().decode(p.subarray(13, 13 + p.subarray(13).indexOf(0)));
@@ -67,6 +79,7 @@ class FakeDevice {
       const got = new Uint8Array(s.buf).subarray(0, s.size);
       setTimeout(() => this._status(id, crc32(got) === s.crc ? ST.VERIFY_OK : ST.VERIFY_FAIL), 30);
     } else if (type === HID.ACTIVATE){
+      if (this.o.noActivate === id) return;   // rebooted, or out of range: no answer at all
       setTimeout(() => this._status(id, ST.COMPLETE), 30);
     }
   }
@@ -78,9 +91,11 @@ async function run(label, opts, image, board, expectOk){
   const c = new OtaClient(d);
   const seen = new Set();
   const t0 = Date.now();
-  const res = await c.update(opts.trackers, image, board, e => seen.add(e.stage));
+  const res = await c.update(opts.updateIds || opts.trackers, image, board, e => seen.add(e.stage));
   await d.close();
-  const pass = JSON.stringify(res.ok) === JSON.stringify(expectOk);
+  const closed = dev.targets.size === 0;
+  const pass = JSON.stringify(res.ok) === JSON.stringify(expectOk) && closed;
+  if (!closed) console.log(`      relay session left open for [${[...dev.targets]}]`);
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}`);
   console.log(`      ok=[${res.ok}] failed=[${res.failed.map(f => f.id + ':' + f.error.i18nKey)}] ` +
               `stages=${[...seen].join('>')} ${((Date.now()-t0)/1000).toFixed(1)}s`);
@@ -106,5 +121,12 @@ all &= await run('slow slot-1 erase (8s)', { trackers: [4], eraseMs: 8000 }, ima
 all &= await run('wrong board target rejected', { trackers: [4] }, image, 'test54l/nrf54l15/cpuapp', []);
 all &= await run('corrupt image fails VERIFY', { trackers: [4] },
                  { data, baseAddress: 0, crc32: (image.crc32 ^ 0xFFFF) >>> 0 }, BOARD, []);
+all &= await run('one of two never answers BEGIN -> other finishes, session closed',
+                 { trackers: [4], updateIds: [4, 6] }, image, BOARD, [4]);
+all &= await run('no answer to ACTIVATE -> session closed', { trackers: [4], noActivate: 4 }, image, BOARD, []);
+all &= await run('one of two silent on ACTIVATE -> other finishes, session closed',
+                 { trackers: [0, 4], noActivate: 4 }, image, BOARD, [0]);
+all &= await run('session left open by an earlier run is cleared first',
+                 { trackers: [4], staleTargets: [7, 9] }, image, BOARD, [4]);
 console.log(all ? '\nALL PASS' : '\nFAILURES');
 process.exit(all ? 0 : 1);

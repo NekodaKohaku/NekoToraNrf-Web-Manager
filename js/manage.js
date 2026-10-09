@@ -70,6 +70,60 @@ export function calApplyEvent(run, e, now = Date.now()){
   return true;
 }
 
+/* ---- temperature calibration (T-Cal) collection session ----
+ *
+ * The tracker keeps one gyro bias per temperature slot, TCAL_MIN..TCAL_MAX
+ * in 1/TCAL_STEPS degree steps (tracker Kconfig SENSOR_POLY_*), and corrects
+ * by temperature once TCAL_MIN_SLOTS are filled. While collecting it reports
+ * one requested TCAL_RUNTIME operation: BEGIN detail = slots already filled,
+ * one STEP (phase COVERAGE, detail = slot index) per slot it writes, END on
+ * stop. Slots are written at most every 25 s, and only while the tracker is
+ * still and warming no faster than TCAL_DISCARD_RATE. */
+export const TCAL_MIN = 10, TCAL_MAX = 45, TCAL_STEPS = 2;
+export const TCAL_SLOTS = (TCAL_MAX - TCAL_MIN) * TCAL_STEPS;
+export const TCAL_MIN_SLOTS = 4;
+export const TCAL_DISCARD_RATE = 2.4;   // C/min: faster windows are thrown away
+export const TCAL_WARN_RATE = 2.0;      // C/min: warn before that happens
+export const TCAL_RENEW_MS = 10000;     // event lease is 15 s
+export function tcalSlotTemp(idx){ return TCAL_MIN + idx / TCAL_STEPS; }
+
+/* Fold one tracker event into a T-Cal session. `run` = { since, targets:Set,
+ * per: Map id -> { op, base, slots:Set, ended } }. Requested operations
+ * only (no auto-origin bit: the tracker's own runtime checks use the same
+ * kind), only after the command went out. A new BEGIN replaces an older
+ * operation (the tracker restates the count when "on" is sent again). */
+export function tcalApplyEvent(run, e, now = Date.now()){
+  if (now < run.since || e.kind !== TEV.KIND_TCAL_RUNTIME || !run.targets.has(e.tracker)) return false;
+  let p = run.per.get(e.tracker);
+  if (e.event === TEV.BEGIN || e.event === TEV.ACCEPTED){
+    let changed = false;
+    if (!p || p.op !== e.op){
+      p = { op: e.op, base: 0, begun: false, slots: new Set(), ended: false };
+      run.per.set(e.tracker, p);
+      changed = true;
+    }
+    if (e.event === TEV.BEGIN && !p.begun){ p.base = e.detail; p.begun = true; changed = true; }
+    return changed;
+  }
+  if (!p || p.op !== e.op) return false;
+  if (e.event === TEV.STEP && e.phase === TEV.PH_COVERAGE && e.detail < TCAL_SLOTS){
+    if (p.slots.has(e.detail)) return false;
+    p.slots.add(e.detail);
+    return true;
+  }
+  if (e.event === TEV.END && !p.ended){ p.ended = true; return true; }
+  return false;
+}
+
+/* Warming rate in C/min over the samples of the last `windowMs`, or null
+ * while there is not enough history. `hist` = [[ms, C], ...], oldest first. */
+export function tcalRate(hist, now = Date.now(), windowMs = 60000){
+  const w = hist.filter(([at]) => now - at <= windowMs);
+  if (w.length < 2 || w[w.length - 1][0] - w[0][0] < windowMs / 3) return null;
+  const [t0, c0] = w[0], [t1, c1] = w[w.length - 1];
+  return (c1 - c0) / ((t1 - t0) / 60000);
+}
+
 const STATE_LABEL = { awake: 'stAwake', standby: 'stStandby', off: 'stOff', asleep: 'stAsleep' };
 export function stateLabel(st){ return t(STATE_LABEL[st] || 'stAsleep'); }
 
@@ -136,7 +190,7 @@ export function createManage(ctx){
 
   function setDisabled(on){
     for (const id of ['btnDozeAll', 'btnWakeAll', 'btnOffAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
-    if (on) for (const id of ['btnRsCal', 'btnRsFactory', 'btnRsRemove']) $(id).disabled = true;
+    if (on) for (const id of ['btnRsCal', 'btnRsFactory', 'btnRsRemove', 'btnTcalStart', 'btnTcalStop']) $(id).disabled = true;
     $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
   }
@@ -373,6 +427,146 @@ export function createManage(ctx){
 
   /* ---- reset: clear calibration, factory reset, remove from dongle ---- */
   let rsRun = null;            // { order:[id], res: Map id -> {st, why?} }
+
+  /* T-Cal session: not a `running` command - it lasts as long as the heating
+   * does, and the rest of the page stays usable meanwhile. */
+  let tcal = null;             // { since, targets, per, events, hist: Map id -> [[ms, C]] }
+  let tcalRenew = null, tcalOff = null, tcalBusy = false;
+
+  async function startTcal(){
+    const d = ctx.dongle();
+    if (!d || running || tcalBusy) return;
+    if (ctx.busy()){ say('tcMsg', t('mgBusyUpdate'), true); return; }
+    tcalBusy = true;
+    renderTcal();
+    try {
+      const ids = () => [...d.seen.keys()].sort((a, b) => a - b);
+      if (ids().some(id => ['standby', 'asleep'].includes(trackerState(d, id)))){
+        say('tcMsg', t('calWaking'));
+        await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        await sleep(3000);
+        if (d.statusSupported) await d.queryStatus().catch(() => null);
+      }
+      const targets = ids().filter(id => trackerState(d, id) === 'awake');
+      if (!targets.length){ say('tcMsg', t('calNone'), true); return; }
+      const events = await d.subscribeCalEvents().catch(() => false);
+      if (events) await sleep(300);           // let the replayed cache go by
+      const keep = tcal ? tcal.hist : new Map();
+      tcal = { since: Date.now(), targets: new Set(targets), per: new Map(), events, hist: keep };
+      if (tcalOff) tcalOff();
+      tcalOff = d.onTrackerEvent(e => { if (tcal && tcalApplyEvent(tcal, e)) renderTcal(); });
+      const a = await d.command(OP.TCAL_AUTO_ON, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      const out = ackOutcome(a, { final: true });
+      log(`tcal auto on -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}, events ${events ? 'on' : 'off'}`);
+      if (out === 'busy' || out === 'noAnswer' || out === 'fail'){
+        say('tcMsg', t(out === 'busy' ? 'mgBusy' : out === 'noAnswer' ? 'mgNoAnswer' : 'mgFail', { st: a && a.status }), true);
+        endTcalWatch();
+        tcal = null;
+        return;
+      }
+      say('tcMsg', t(events ? 'tcRunning' : 'tcNoEvents', { n: targets.length }));
+      clearInterval(tcalRenew);
+      if (events) tcalRenew = setInterval(() => {
+        const dd = ctx.dongle();
+        if (dd) dd.subscribeCalEvents(TEV.RENEW).catch(() => false);
+      }, TCAL_RENEW_MS);
+    } catch (e){
+      say('tcMsg', t('mgNoAnswer'), true);
+      log('tcal start failed: ' + (e && e.message), 'err');
+    } finally {
+      tcalBusy = false;
+      renderTcal();
+    }
+  }
+
+  function endTcalWatch(){
+    clearInterval(tcalRenew); tcalRenew = null;
+    if (tcalOff){ tcalOff(); tcalOff = null; }
+  }
+
+  async function stopTcal(){
+    const d = ctx.dongle();
+    if (!d || !tcal || tcalBusy) return;
+    tcalBusy = true;
+    renderTcal();
+    try {
+      const a = await d.command(OP.TCAL_AUTO_OFF, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      log(`tcal auto off -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}`);
+      await sleep(500);                       // the END events
+      const total = id => { const p = tcal.per.get(id); return p ? p.base + p.slots.size : 0; };
+      const few = [...tcal.targets].filter(id => total(id) < TCAL_MIN_SLOTS).length;
+      say('tcMsg', few ? t('tcStoppedFew', { bad: few }) : t('tcStopped', { ok: tcal.targets.size }), !!few);
+      tcal.stopped = true;
+    } catch (e){
+      say('tcMsg', t('mgNoAnswer'), true);
+    } finally {
+      endTcalWatch();
+      tcalBusy = false;
+      renderTcal();
+    }
+  }
+
+  /* Rows keyed by id and updated in place, like the tracker list. */
+  function renderTcal(){
+    const d = ctx.dongle();
+    const open = !!tcal && !tcal.stopped;
+    $('btnTcalStart').disabled = !d || running || tcalBusy || open;
+    $('btnTcalStop').disabled = !d || tcalBusy || !open;
+    const list = $('tcList');
+    if (!d || !tcal){ list.innerHTML = ''; list.classList.add('hidden'); return; }
+    list.classList.remove('hidden');
+    const now = Date.now();
+    for (const id of [...tcal.targets].sort((a, b) => a - b)){
+      const e = d.seen.get(id);
+      const hist = tcal.hist.get(id) || [];
+      if (open && e && e.temp !== undefined && isAwake(e, now)
+          && (!hist.length || hist[hist.length - 1][0] < e.tempAt)){
+        hist.push([e.tempAt, e.temp]);
+        while (hist.length && now - hist[0][0] > 120000) hist.shift();
+        tcal.hist.set(id, hist);
+      }
+      let row = list.querySelector(`[data-tid="${id}"]`);
+      if (!row){
+        row = document.createElement('div');
+        row.className = 'tcRow';
+        row.dataset.tid = String(id);
+        row.innerHTML = '<span class="tName"></span><span class="tcTemp"></span>'
+          + `<div class="tcBar">${'<i></i>'.repeat(TCAL_SLOTS)}<b></b></div>`
+          + '<span class="tcCount"></span><span class="calChip"></span>';
+        list.appendChild(row);
+      }
+      row.querySelector('.tName').textContent = t('otaTracker', { id });
+      const p = tcal.per.get(id);
+      const awake = e && isAwake(e, now);
+      const temp = awake && e.temp !== undefined ? e.temp : null;
+      const rate = tcalRate(hist, now);
+      const bits = [];
+      if (temp !== null) bits.push(temp.toFixed(1) + '°C');
+      if (rate !== null) bits.push((rate >= 0 ? '+' : '') + t('tcRate', { r: rate.toFixed(1) }));
+      row.querySelector('.tcTemp').textContent = bits.join(' · ');
+      const cells = row.querySelectorAll('.tcBar i');
+      cells.forEach((c, i) => c.classList.toggle('on', !!p && p.slots.has(i)));
+      const mark = row.querySelector('.tcBar b');
+      mark.classList.toggle('hidden', temp === null);
+      if (temp !== null){
+        const f = Math.min(1, Math.max(0, (temp - TCAL_MIN) / (TCAL_MAX - TCAL_MIN)));
+        mark.style.left = (f * 100).toFixed(1) + '%';
+      }
+      row.querySelector('.tcCount').textContent = p
+        ? [t('tcSlots', { n: p.slots.size }), p.base ? t('tcBase', { n: p.base }) : ''].filter(Boolean).join(' · ')
+        : '';
+      const chip = row.querySelector('.calChip');
+      let st, key;
+      if (!awake && !(p && p.ended)){ st = 'warn'; key = 'tcStGone'; }
+      else if (p && p.ended){ st = p.base + p.slots.size >= TCAL_MIN_SLOTS ? 'ok' : 'warn'; key = 'tcStEnd'; }
+      else if (temp !== null && temp > TCAL_MAX){ st = 'fail'; key = 'tcHot'; }
+      else if (rate !== null && rate > TCAL_WARN_RATE){ st = 'fail'; key = 'tcFast'; }
+      else if (p){ st = 'run'; key = 'tcStRun'; }
+      else { st = ''; key = tcal.events ? 'tcStWait' : 'tcStRunNoEv'; }
+      chip.className = 'calChip' + (st ? ' ' + st : '');
+      chip.textContent = t(key);
+    }
+  }
 
   const RS_CAL_OPS = [OP.RESET_ZRO, OP.RESET_ACC, OP.SENS_RESET, OP.RESET_TCAL];
 
@@ -637,6 +831,7 @@ export function createManage(ctx){
     renderList(d);
     if (full || !$('chCards').children.length) renderChannels();
     if (full){ renderCal(); renderResetList(); }
+    renderTcal();
   }
 
   function bind(){
@@ -653,6 +848,8 @@ export function createManage(ctx){
     $('btnPairOff').onclick = () => run('mgPairMsg', OP.EXIT_PAIR, [], { final: false, ok: 'mgPairOffDone' });
     $('btnScan').onclick = () => scanChannels();
     $('btnCal').onclick = () => calibrateAll();
+    $('btnTcalStart').onclick = () => startTcal();
+    $('btnTcalStop').onclick = () => stopTcal();
     $('rsTarget').onchange = () => { const d = ctx.dongle(); if (d) renderResetButtons(d); };
     $('btnRsCal').onclick = () => resetAction('cal');
     $('btnRsFactory').onclick = () => resetAction('factory');
@@ -729,7 +926,7 @@ export function createManage(ctx){
   return {
     render,
     /* A different dongle has other surroundings: forget the last scan. */
-    reset(){ scan = null; calRun = null; rsRun = null; },
+    reset(){ scan = null; calRun = null; rsRun = null; endTcalWatch(); tcal = null; },
     bind,
     show(){ render(true); if (!timer) timer = setInterval(() => { if (!running) render(); }, 1000); },
     hide(){ clearInterval(timer); timer = null; },

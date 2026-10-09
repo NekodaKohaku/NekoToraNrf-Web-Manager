@@ -4,8 +4,9 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { classifyFirmwareFile, MCUBOOT_IMAGE_MAGIC } from '../js/image.js';
-import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS } from '../js/telemetry.js';
-import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText, calApplyEvent } from '../js/manage.js';
+import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS, tempFrom } from '../js/telemetry.js';
+import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText, calApplyEvent,
+         tcalApplyEvent, tcalRate, tcalSlotTemp, TCAL_SLOTS } from '../js/manage.js';
 import { ACK, parseDongleStatus, parseScanResult, parseTrackerEvent, TEV } from '../js/ota.js';
 import { EXTRA } from '../js/i18n_extra.js';
 import { HELP_TEXT, HELP_LED_KEYS, HELP_DONGLE_LED_KEYS } from '../js/help.js';
@@ -133,4 +134,34 @@ for (const l of langs){
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
+/* ---- temperature calibration ---- */
+check('IMU temperature byte decodes', tempFrom(128) === 25 && tempFrom(168) === 45 && tempFrom(98) === 10 && tempFrom(0) === null);
+{
+  const s = new Uint8Array(16); s[0] = 2; s[1] = 1; s[2] = 0x80 | 50; s[3] = 140; s[4] = 158;
+  const e = applyTelemetry({}, s, 1000);
+  check('compact telemetry carries the temperature', e.temp === 40 && e.tempAt === 1000);
+}
+check('70 slots, 10 C and 0.5 C apart', TCAL_SLOTS === 70 && tcalSlotTemp(0) === 10 && tcalSlotTemp(69) === 44.5);
+{
+  const run = { since: 0, targets: new Set([1]), per: new Map() };
+  const ev = (event, op, phase, detail, kind = 7, tracker = 1) => tcalApplyEvent(run, { event, op, phase, detail, kind, tracker }, 10);
+  check('accepted opens the session', ev(TEV.ACCEPTED, 5, 0, 0) && run.per.get(1).base === 0);
+  check('begin after accepted sets the earlier count', ev(TEV.BEGIN, 5, 4, 7) && run.per.get(1).base === 7);
+  check('repeated begin is not a change', !ev(TEV.BEGIN, 5, 4, 7));
+  check('coverage step adds a slot', ev(TEV.STEP, 5, TEV.PH_COVERAGE, 30) && run.per.get(1).slots.has(30));
+  check('same slot again (heartbeat) is not a change', !ev(TEV.STEP, 5, TEV.PH_COVERAGE, 30));
+  check('auto-origin of the same kind ignored', !ev(TEV.STEP, 5, TEV.PH_COVERAGE, 31, 7 | 0x80));
+  check('zero-offset calibration ignored', !ev(TEV.STEP, 5, TEV.PH_COVERAGE, 31, 1));
+  check('another operation\'s step ignored', !ev(TEV.STEP, 4, TEV.PH_COVERAGE, 31));
+  check('slot index out of range ignored', !ev(TEV.STEP, 5, TEV.PH_COVERAGE, 70));
+  check('untargeted tracker ignored', !ev(TEV.STEP, 5, TEV.PH_COVERAGE, 31, 7, 2));
+  check('end marks it finished', ev(TEV.END, 5, 16, 0) && run.per.get(1).ended);
+  check('a new operation (on sent again) starts over', ev(TEV.ACCEPTED, 6, 0, 0) && run.per.get(1).slots.size === 0 && !run.per.get(1).ended);
+  check('events before the command are ignored', !tcalApplyEvent({ since: 100, targets: new Set([1]), per: new Map() },
+        { event: TEV.ACCEPTED, op: 9, phase: 0, detail: 0, kind: 7, tracker: 1 }, 50));
+}
+check('rate needs 20 s of history', tcalRate([[0, 30], [10000, 30.2]], 10000) === null);
+check('rate in C per minute', Math.abs(tcalRate([[0, 30], [30000, 30.5], [60000, 31]], 60000) - 1) < 1e-9);
+check('rate uses the last minute only', Math.abs(tcalRate([[0, 20], [60000, 30], [120000, 31]], 120000) - 1) < 1e-9);
+
 process.exit(fails ? 1 : 0);

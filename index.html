@@ -214,6 +214,19 @@ nav.tabs button[aria-current="page"]{color:var(--text);border-bottom-color:var(-
 .calChip.ok{background:#dcfce7;color:#166534}
 .calChip.fail{background:#fee2e2;color:#991b1b}
 .calChip.warn{background:var(--warn-bg);color:var(--warn)}
+.tcHow{margin:6px 0 12px;padding-left:20px;font-size:13px;color:var(--muted)}
+.tcHow li{margin:2px 0}
+.tcList{margin-top:12px;border:1px solid var(--border);border-radius:12px}
+.tcRow{display:grid;grid-template-columns:6.5em 8.5em 1fr auto auto;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
+.tcRow:last-child{border-bottom:none}
+.tcRow .tName{font-weight:600}
+.tcRow .tcTemp,.tcRow .tcCount{color:var(--muted);white-space:nowrap}
+.tcBar{position:relative;display:grid;grid-template-columns:repeat(70,1fr);gap:1px;height:12px;min-width:120px}
+.tcBar i{background:var(--border);border-radius:1px}
+.tcBar i.on{background:#0891b2}
+.tcBar b{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:var(--text,#111);border-radius:1px}
+.tcBar b.hidden{display:none}
+@media (max-width:640px){ .tcRow{grid-template-columns:1fr auto;} .tcRow .tcBar{grid-column:1 / -1;} }
 @media (prefers-color-scheme: dark){
   .calChip.run{background:#164e63;color:#a5f3fc}.calChip.ok{background:#14532d;color:#bbf7d0}.calChip.fail{background:#450a0a;color:#fecaca}
 }
@@ -533,6 +546,24 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
       <p id="mgChMsg" class="desc hidden" style="margin-top:10px"></p>
       <div id="mgUsb3" class="banner hidden" data-i18n="mgUsb3"></div>
     </section>
+    <details class="adv" id="tcalBox">
+      <summary data-i18n="tcTitle"></summary>
+      <div class="advBody">
+        <p class="desc" data-i18n="tcDesc"></p>
+        <ol class="tcHow">
+          <li data-i18n="tcHow1"></li>
+          <li data-i18n="tcHow2"></li>
+          <li data-i18n="tcHow3"></li>
+          <li data-i18n="tcHow4"></li>
+        </ol>
+        <div class="row">
+          <button id="btnTcalStart" class="btn primary" data-i18n="tcStart"></button>
+          <button id="btnTcalStop" class="btn alt" data-i18n="tcStop" disabled></button>
+        </div>
+        <p id="tcMsg" class="desc hidden" style="margin-top:10px"></p>
+        <div id="tcList" class="tcList hidden"></div>
+      </div>
+    </details>
     <details class="adv" id="resetBox">
       <summary data-i18n="rsTitle"></summary>
       <div class="advBody">

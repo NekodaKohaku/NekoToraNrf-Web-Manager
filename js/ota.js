@@ -63,6 +63,8 @@ export const OP = {
   // tracker remote resets (ESB_PONG_FLAG_*)
   CLEAR_PAIR: 0x08, SENS_RESET: 0x0D, RESET_ZRO: 0x0E, RESET_ACC: 0x0F,
   RESET_BAT: 0x10, RESET_TCAL: 0x12,
+  // temperature calibration: collect gyro bias per temperature while still
+  TCAL_AUTO_ON: 0x13, TCAL_AUTO_OFF: 0x14,
   // dongle: forget one tracker by id, other ids unchanged (NekoTora receiver)
   REMOVE_ID: 250,
   // tracker events (receiver tracker_event_protocol.h): subscribe, then
@@ -81,9 +83,9 @@ export const TEV = {
   // outcome
   SUCCESS: 1, FAILED: 2, CANCELLED: 3, SKIPPED: 4,
   // kind
-  KIND_ZRO: 1, ORIGIN_AUTO: 0x80,
+  KIND_ZRO: 1, KIND_TCAL_RUNTIME: 7, ORIGIN_AUTO: 0x80,
   // phase
-  PH_WAIT_STILL: 2, PH_COLLECT: 4,
+  PH_WAIT_STILL: 2, PH_COLLECT: 4, PH_COVERAGE: 19,
   // reason (END detail)
   R_BUSY: 1, R_SENSOR: 4, R_MOTION: 5, R_TIMEOUT: 6, R_SAMPLES: 7, R_TEMPERATURE: 23,
 };

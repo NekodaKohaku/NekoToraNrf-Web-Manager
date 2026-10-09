@@ -11,6 +11,7 @@
  *   type 3  status   [2] svr_stat [3] status                                [15] rssi
  *   type 5  runtime                                                          [15] rssi
  *
+ * temp:   IMU temperature, (byte - 128) / 2 + 25 degrees C; 0 = none.
  * batt:   0 = no battery; 255 = charged; otherwise bit 7 set + percent.
  * batt_v: millivolts / 10 - 245. A tracker on USB power reports at least
  *         4310 mV whatever the cell is at, which is how "charging" is read.
@@ -35,6 +36,11 @@ export function batteryFrom(battByte, voltByte){
   return { present: true, pct, mV, charged, charging: mV !== null && mV >= CHARGING_MV };
 }
 
+/* Tracker connection.c: (temp - 25) * 2 + 128.5, clamped to 1..255. */
+export function tempFrom(b){
+  return b ? (b - 128) / 2 + 25 : null;
+}
+
 /* The dongle smooths RSSI and writes it as a signed byte; firmware of either
  * sign convention exists, so both are accepted. 0 means "no reading". */
 export function rssiFrom(b){
@@ -48,7 +54,11 @@ export function applyTelemetry(entry, sub, now){
   entry.online = true;
   entry.lastSeen = now;
   if (sub.length < 16) return entry;
-  if (BATTERY_TYPES.has(type)) entry.battery = batteryFrom(sub[2], sub[3]);
+  if (BATTERY_TYPES.has(type)){
+    entry.battery = batteryFrom(sub[2], sub[3]);
+    const temp = tempFrom(sub[4]);
+    if (temp !== null){ entry.temp = temp; entry.tempAt = now; }
+  }
   if (RSSI_TYPES.has(type)){
     const r = rssiFrom(sub[15]);
     if (r !== null) entry.rssi = r;

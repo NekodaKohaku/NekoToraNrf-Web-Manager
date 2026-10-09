@@ -58,6 +58,7 @@ let scanBusy = { 2: 3, 50: 30, 76: 120, 24: 400 };
 let streaming = true;
 let supportEvents = true;
 let calFail2 = true;          // tracker 2 reports movement
+let temp1 = 30.0;             // tracker 1 IMU temperature, warming during T-Cal
 const subs = [];
 const dongle = {
   opened: false, productName: 'NekoTora Dongle', listeners: [], runs: 0,
@@ -78,10 +79,10 @@ const dongle = {
     this.ack(seq, 253, 0, d);
   },
   /* A TRACKER_EVENT record (tracker_event_encode_hid), padded like a report. */
-  event(tid, ev, outcome, op, phase, detail, nonce){
+  event(tid, ev, outcome, op, phase, detail, nonce, kind = 1){
     nonce += 10000 * (++this.runs);     // every event its own nonce, as on a tracker
     const f = new Uint8Array(64);
-    f.set([251, 0, 225, ev | (outcome << 4), tid, nonce & 255, (nonce >> 8) & 255, 0, 0, ev, 0, op & 255, op >> 8, 1, phase, detail]);
+    f.set([251, 0, 225, ev | (outcome << 4), tid, nonce & 255, (nonce >> 8) & 255, 0, 0, ev, 0, op & 255, op >> 8, kind, phase, detail]);
     f.set(pad(1), 16); f.set(pad(2), 32); f.set(pad(3), 48);
     this.emit(f);
     this.emit(f);                       // the dongle repeats events
@@ -134,6 +135,27 @@ const dongle = {
         }
         return;
       }
+      if ((p[2] === 0x13 || p[2] === 0x14) && supportEvents){
+        setTimeout(() => this.ack(p[1], p[2], 7), 5);
+        setTimeout(() => this.ack(p[1], p[2], 0), 60);
+        const T = 7;                      // CAL_KIND_TCAL_RUNTIME, requested
+        if (p[2] === 0x13){
+          /* tracker 1: 3 slots from before, then two new ones; tracker 2: one.
+           * An auto-origin runtime check of the same kind must be ignored. */
+          setTimeout(() => this.event(1, 1, 0, 70, 0, 0, 2001, T), 80);
+          setTimeout(() => this.event(1, 2, 0, 70, 4, 3, 2002, T), 90);
+          setTimeout(() => this.event(2, 1, 0, 71, 0, 0, 2003, T), 80);
+          setTimeout(() => this.event(2, 2, 0, 71, 4, 0, 2004, T), 90);
+          setTimeout(() => this.event(1, 3, 0, 70, 19, 40, 2005, T), 150);
+          setTimeout(() => this.event(1, 3, 0, 70, 19, 41, 2006, T), 200);
+          setTimeout(() => this.event(2, 3, 0, 71, 19, 40, 2007, T), 200);
+          setTimeout(() => this.event(2, 3, 0, 99, 19, 60, 2008, T | 0x80), 220);
+        } else {
+          setTimeout(() => this.event(1, 4, 1, 70, 16, 0, 2101, T), 80);
+          setTimeout(() => this.event(2, 4, 1, 71, 16, 0, 2102, T), 80);
+        }
+        return;
+      }
       if (p[2] === 209){ setTimeout(() => this.ack(p[1], 209, 7), 5); this.scan(p[1]); return; }
       if (p[2] === 0x70 || p[2] === 0x71){
         const on = p[2] === 0x71, all = p[4] === 0xFF;
@@ -168,9 +190,10 @@ const dongle = {
 };
 /* tracker 1: 85%, 3.90 V, -52 dBm; tracker 2: 10%, 3.70 V, not charging;
  * tracker 3: registered only (address padding, no telemetry) */
-function info(id, pct, vByte, rssi){
+function info(id, pct, vByte, rssi, temp = 25){
   const s = new Uint8Array(16);
   s[0] = 0; s[1] = id; s[2] = 0x80 | pct; s[3] = vByte; s[12] = 1; s[13] = 0; s[14] = 0; s[15] = rssi;
+  s[4] = Math.floor((temp - 25) * 2 + 128.5);   // (uint8_t) cast in connection.c
   return s;
 }
 function reg(id){
@@ -190,7 +213,7 @@ let awake3 = false;           // tracker 3 switched on after the scan
 setInterval(() => {
   if (!dongle.opened || !streaming) return;
   const f = new Uint8Array(64);
-  f.set(info(1, 85, 145, 52), 0);
+  f.set(info(1, 85, 145, 52, temp1), 0);
   f.set(registered.has(2) ? info(2, battery2, charging2 ? 190 : 125, 60) : pad(2), 16);
   f.set(awake3 ? info(3, 70, 140, 55) : pad(3), 32);
   f.set(pad(1), 48);
@@ -380,6 +403,37 @@ click($('btnCal'));
 await until(() => /已送出校正指令/.test(txt('calMsg')), 16000);
 check('dongle without events: falls back to the light', /青色燈熄滅/.test(txt('calMsg')), txt('calMsg'));
 supportEvents = true;
+
+/* ---------------------- temperature calibration ---------------------- */
+check('T-Cal box collapsed under advanced, with the how-to', !$('tcalBox').open && $('tcalBox').querySelectorAll('.tcHow li').length === 4);
+check('T-Cal: finish disabled before starting', $('btnTcalStop').disabled && !$('btnTcalStart').disabled);
+$('tcalBox').open = true;
+const ntc = cmds.length;
+click($('btnTcalStart'));
+await until(() => /收集中/.test(txt('tcMsg')), 8000);
+const tcOps = cmds.slice(ntc).map(c => [c.op, c.args[0]]).filter(([op]) => op !== 253 && op !== 224);
+check('T-Cal start: wakes standby first, then auto-on to all trackers', JSON.stringify(tcOps.slice(-1)) === '[[19,255]]' && tcOps.every(([op]) => op === 0x71 || op === 0x13), JSON.stringify(tcOps));
+const tcRow = id => $('tcList').querySelector(`[data-tid="${id}"]`);
+await until(() => tcRow(1) && /本次 2 格/.test(tcRow(1).textContent), 3000);
+check('tracker 1: two new slots, three from before', /本次 2 格/.test(tcRow(1).textContent) && /原有 3 格/.test(tcRow(1).textContent), tcRow(1) && tcRow(1).textContent);
+check('tracker 1: coverage cells 40 and 41 lit', tcRow(1).querySelectorAll('.tcBar i.on').length === 2
+      && tcRow(1).querySelectorAll('.tcBar i')[40].classList.contains('on'));
+check('tracker 2: one slot; the auto-origin event is ignored', /本次 1 格/.test(tcRow(2).textContent) && tcRow(2).querySelectorAll('.tcBar i.on').length === 1, tcRow(2) && tcRow(2).textContent);
+check('tracker 1 shows its IMU temperature', /30\.0°C/.test(tcRow(1).textContent), tcRow(1).textContent);
+check('T-Cal: start disabled and finish enabled while collecting', $('btnTcalStart').disabled && !$('btnTcalStop').disabled);
+/* warming 6 C/min: the page warns before the tracker throws the data away */
+const warm = setInterval(() => { temp1 += 0.1; }, 1000).unref();
+await until(() => /升溫太快/.test(tcRow(1).textContent), 30000);
+clearInterval(warm);
+check('fast warming flagged', /升溫太快/.test(tcRow(1).textContent), tcRow(1).textContent);
+const ntc2 = cmds.length;
+click($('btnTcalStop'));
+await until(() => /已結束/.test(txt('tcMsg')), 8000);
+check('T-Cal finish: auto-off to all', cmds.slice(ntc2).some(c => c.op === 0x14 && c.args[0] === 255));
+check('tracker 2 under 4 slots: finish warns', /1 顆不到 4 格/.test(txt('tcMsg')), txt('tcMsg'));
+check('tracker 1 (5 slots) finished ok', tcRow(1).querySelector('.calChip').classList.contains('ok'), tcRow(1).innerHTML);
+check('T-Cal: can start again after finishing', !$('btnTcalStart').disabled && $('btnTcalStop').disabled);
+$('tcalBox').open = false;
 
 /* ---------------------------- update page ---------------------------- */
 await gotoPage('update');

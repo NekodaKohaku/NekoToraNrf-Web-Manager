@@ -251,7 +251,7 @@ check('four home cards (calibration not shown yet)', window.document.querySelect
 check('chip says not connected', /未連接/.test(txt('dongleChip')), txt('dongleChip'));
 await gotoPage('help');
 check('help page shown', shown('pageHelp') && !shown('pageHome'));
-check('help: 21 tracker light rows (no charging patterns)', window.document.querySelectorAll('#helpBody table.help')[0].querySelectorAll('tbody tr').length === 21);
+check('help: 23 tracker light rows (no charging patterns)', window.document.querySelectorAll('#helpBody table.help')[0].querySelectorAll('tbody tr').length === 23);
 check('help: waiting-for-update light listed', /等待其他追蹤器更新/.test(txt('helpBody')));
 check('help: wireless update light listed', /無線更新中/.test(txt('helpBody')));
 check('help: dongle light table with 10 rows', window.document.querySelectorAll('#helpBody table.help')[1].querySelectorAll('tbody tr').length === 10);
@@ -398,6 +398,14 @@ calFail2 = false;
 click($('btnCal'));
 await until(() => /全部成功/.test(txt('calMsg')), 12000);
 check('second run: all succeed', /2 顆全部成功/.test(txt('calMsg')), txt('calMsg'));
+$('calTarget').value = '1'; $('calTarget').dispatchEvent(new window.Event('change'));
+const nc1 = cmds.length;
+click($('btnCal'));
+await until(() => cmds.slice(nc1).some(c => c.op === 2) && /1 顆全部成功/.test(txt('calMsg')), 12000);
+const oneOps = cmds.slice(nc1).map(c => [c.op, c.args[0]]).filter(([op]) => op !== 253 && op !== 224);
+check('single tracker: CALIBRATE to tracker 1 only', JSON.stringify(oneOps) === '[[2,1]]', JSON.stringify(oneOps));
+check('single tracker: only its result listed', $('calList').querySelectorAll('[data-tid]').length === 1 && /1 顆全部成功/.test(txt('calMsg')), txt('calMsg'));
+$('calTarget').value = 'all'; $('calTarget').dispatchEvent(new window.Event('change'));
 supportEvents = false;
 click($('btnCal'));
 await until(() => /已送出校正指令/.test(txt('calMsg')), 16000);
@@ -433,6 +441,19 @@ check('T-Cal finish: auto-off to all', cmds.slice(ntc2).some(c => c.op === 0x14 
 check('tracker 2 under 4 slots: finish warns', /1 顆不到 4 格/.test(txt('tcMsg')), txt('tcMsg'));
 check('tracker 1 (5 slots) finished ok', tcRow(1).querySelector('.calChip').classList.contains('ok'), tcRow(1).innerHTML);
 check('T-Cal: can start again after finishing', !$('btnTcalStart').disabled && $('btnTcalStop').disabled);
+$('tcTarget').value = '2'; $('tcTarget').dispatchEvent(new window.Event('change'));
+const ntc3 = cmds.length;
+click($('btnTcalStart'));
+await until(() => /收集中/.test(txt('tcMsg')) && !$('btnTcalStop').disabled, 8000);
+check('T-Cal single: auto-on to tracker 2 only, one row', cmds.slice(ntc3).some(c => c.op === 0x13 && c.args[0] === 2)
+      && !cmds.slice(ntc3).some(c => c.op === 0x13 && c.args[0] === 255)
+      && $('tcList').querySelectorAll('.tcRow').length === 1 && tcRow(2), $('tcList').innerHTML.slice(0, 120));
+check('T-Cal single: target locked while collecting', $('tcTarget').disabled);
+const ntc4 = cmds.length;
+click($('btnTcalStop'));
+await until(() => /已結束/.test(txt('tcMsg')), 8000);
+check('T-Cal single: auto-off to tracker 2 only', cmds.slice(ntc4).some(c => c.op === 0x14 && c.args[0] === 2) && !cmds.slice(ntc4).some(c => c.op === 0x14 && c.args[0] === 255));
+$('tcTarget').value = 'all'; $('tcTarget').dispatchEvent(new window.Event('change'));
 $('tcalBox').open = false;
 
 /* ---------------------------- update page ---------------------------- */
@@ -504,12 +525,28 @@ let n0r = cmds.length;
 click($('btnRsCal'));
 await sleep(50);
 check('clear calibration asks first (no tick box)', shown('confirmOverlay') && !shown('confirmAckRow'));
+check('confirm lists what is cleared; temperature calibration not by default',
+      /零偏、加速度計、靈敏度/.test(txt('confirmText')) && !/溫度/.test(txt('confirmText')), txt('confirmText'));
 click($('btnConfirmYes'));
 await until(() => /已清除 3 顆/.test(txt('rsMsg')), 15000);
-const calR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
+let calR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
 const perT = id => calR.filter(([, a]) => a === id).map(([op]) => op);
-check('clear calibration: four resets per tracker, pairing untouched',
-      JSON.stringify(perT(1)) === '[14,15,13,18]' && JSON.stringify(perT(3)) === '[14,15,13,18]' && !calR.some(([op]) => op === 8 || op === 250), JSON.stringify(calR));
+check('clear calibration: three resets per tracker (T-Cal kept), pairing untouched',
+      JSON.stringify(perT(1)) === '[14,15,13]' && JSON.stringify(perT(3)) === '[14,15,13]' && !calR.some(([op]) => op === 8 || op === 250), JSON.stringify(calR));
+const which = v => $('rsWhich').querySelector(`input[value="${v}"]`);
+const tick = (v, on) => { which(v).checked = on; which(v).dispatchEvent(new window.Event('change')); };
+tick('zro', false); tick('acc', false); tick('sens', false);
+check('nothing ticked: clear calibration disabled', $('btnRsCal').disabled);
+tick('zro', true); tick('tcal', true);
+n0r = cmds.length;
+click($('btnRsCal')); await sleep(50);
+check('confirm names temperature calibration when ticked', /溫度校正/.test(txt('confirmText')), txt('confirmText'));
+click($('btnConfirmYes'));
+await until(() => cmds.slice(n0r).filter(c => c.op === 0x12).length === 3, 15000);
+await until(() => /已清除 3 顆/.test(txt('rsMsg')), 15000);
+calR = cmds.slice(n0r).filter(c => c.op !== 253).map(c => [c.op, c.args[0]]);
+check('only the ticked ones: zero offset and temperature', JSON.stringify(perT(1)) === '[14,18]', JSON.stringify(calR));
+tick('acc', true); tick('sens', true); tick('tcal', false);
 // factory reset tracker 2
 $('rsTarget').value = '2'; $('rsTarget').dispatchEvent(new window.Event('change'));
 check('single tracker: remove enabled', !$('btnRsRemove').disabled);

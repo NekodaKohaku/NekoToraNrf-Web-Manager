@@ -189,7 +189,7 @@ export function createManage(ctx){
   }
 
   function setDisabled(on){
-    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnOffAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
+    for (const id of ['btnDozeAll', 'btnWakeAll', 'btnOffAll', 'btnPairOn', 'btnPairOff', 'btnCal', 'calTarget', 'rsTarget', 'btnRsPair']) $(id).disabled = on;
     if (on) for (const id of ['btnRsCal', 'btnRsFactory', 'btnRsRemove', 'btnTcalStart', 'btnTcalStop']) $(id).disabled = true;
     $('btnScan').disabled = on || ctx.dongle() && ctx.dongle().statusSupported === false;
     for (const b of document.querySelectorAll('#chCards button, #mgList button')) b.disabled = on;
@@ -351,11 +351,13 @@ export function createManage(ctx){
     $('calCard').classList.add('calOn');
     let off = null, tick = null;
     try {
-      const ids = () => [...d.seen.keys()].sort((a, b) => a - b);
+      const pick = $('calTarget').value;
+      const one = pick === 'all' ? null : Number(pick);
+      const ids = () => one === null ? [...d.seen.keys()].sort((a, b) => a - b) : [one];
       /* A tracker in standby has its sensor stopped: wake those first. */
       if (ids().some(id => ['standby', 'asleep'].includes(trackerState(d, id)))){
         say('calMsg', t('calWaking'));
-        await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        await d.command(OP.WAKE, [one === null ? ALL_TRACKERS : one], { final: true, finalMs: 6000 });
         await sleep(3000);
         if (d.statusSupported) await d.queryStatus().catch(() => null);
       }
@@ -373,7 +375,7 @@ export function createManage(ctx){
       setCalBar(0);
       tick = setInterval(() => setCalBar((Date.now() - t0) / CAL_EXPECT_MS), 200);
 
-      const a = await d.command(OP.CALIBRATE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      const a = await d.command(OP.CALIBRATE, [one === null ? ALL_TRACKERS : one], { final: true, finalMs: 6000 });
       const out = ackOutcome(a, { final: true });
       log(`calibrate all -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}, events ${events ? 'on' : 'off'}`);
       if (out === 'busy' || out === 'noAnswer' || out === 'fail'){
@@ -440,10 +442,12 @@ export function createManage(ctx){
     tcalBusy = true;
     renderTcal();
     try {
-      const ids = () => [...d.seen.keys()].sort((a, b) => a - b);
+      const pick = $('tcTarget').value;
+      const one = pick === 'all' ? null : Number(pick);
+      const ids = () => one === null ? [...d.seen.keys()].sort((a, b) => a - b) : [one];
       if (ids().some(id => ['standby', 'asleep'].includes(trackerState(d, id)))){
         say('tcMsg', t('calWaking'));
-        await d.command(OP.WAKE, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+        await d.command(OP.WAKE, [one === null ? ALL_TRACKERS : one], { final: true, finalMs: 6000 });
         await sleep(3000);
         if (d.statusSupported) await d.queryStatus().catch(() => null);
       }
@@ -452,10 +456,11 @@ export function createManage(ctx){
       const events = await d.subscribeCalEvents().catch(() => false);
       if (events) await sleep(300);           // let the replayed cache go by
       const keep = tcal ? tcal.hist : new Map();
-      tcal = { since: Date.now(), targets: new Set(targets), per: new Map(), events, hist: keep };
+      tcal = { since: Date.now(), targets: new Set(targets), per: new Map(), events, hist: keep,
+               arg: one === null ? ALL_TRACKERS : one };
       if (tcalOff) tcalOff();
       tcalOff = d.onTrackerEvent(e => { if (tcal && tcalApplyEvent(tcal, e)) renderTcal(); });
-      const a = await d.command(OP.TCAL_AUTO_ON, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      const a = await d.command(OP.TCAL_AUTO_ON, [tcal.arg], { final: true, finalMs: 6000 });
       const out = ackOutcome(a, { final: true });
       log(`tcal auto on -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}, events ${events ? 'on' : 'off'}`);
       if (out === 'busy' || out === 'noAnswer' || out === 'fail'){
@@ -490,7 +495,7 @@ export function createManage(ctx){
     tcalBusy = true;
     renderTcal();
     try {
-      const a = await d.command(OP.TCAL_AUTO_OFF, [ALL_TRACKERS], { final: true, finalMs: 6000 });
+      const a = await d.command(OP.TCAL_AUTO_OFF, [tcal.arg], { final: true, finalMs: 6000 });
       log(`tcal auto off -> ${a ? a.status : 'none'}${a && a.final ? '/' + a.final.status : ''}`);
       await sleep(500);                       // the END events
       const total = id => { const p = tcal.per.get(id); return p ? p.base + p.slots.size : 0; };
@@ -511,10 +516,12 @@ export function createManage(ctx){
     const d = ctx.dongle();
     const open = !!tcal && !tcal.stopped;
     $('btnTcalStart').disabled = !d || running || tcalBusy || open;
+    $('tcTarget').disabled = !d || running || tcalBusy || open;
     $('btnTcalStop').disabled = !d || tcalBusy || !open;
     const list = $('tcList');
     if (!d || !tcal){ list.innerHTML = ''; list.classList.add('hidden'); return; }
     list.classList.remove('hidden');
+    for (const row of [...list.children]) if (!tcal.targets.has(Number(row.dataset.tid))) row.remove();
     const now = Date.now();
     for (const id of [...tcal.targets].sort((a, b) => a - b)){
       const e = d.seen.get(id);
@@ -569,6 +576,12 @@ export function createManage(ctx){
   }
 
   const RS_CAL_OPS = [OP.RESET_ZRO, OP.RESET_ACC, OP.SENS_RESET, OP.RESET_TCAL];
+  /* "Clear calibration" clears only what is ticked. Temperature calibration
+   * starts unticked: it is made at the factory with a heater and cannot be
+   * redone at home. Factory reset still clears everything. */
+  const RS_WHICH = { zro: OP.RESET_ZRO, acc: OP.RESET_ACC, sens: OP.SENS_RESET, tcal: OP.RESET_TCAL };
+  const RS_WHICH_KEY = { zro: 'rsWZro', acc: 'rsWAcc', sens: 'rsWSens', tcal: 'rsWTcal' };
+  const rsWhich = () => [...document.querySelectorAll('#rsWhich input:checked')].map(i => i.value);
 
   function rsSelected(){
     const v = $('rsTarget').value;
@@ -577,8 +590,9 @@ export function createManage(ctx){
 
   /* Options are kept in place (the list refreshes every second and a
    * rebuilt <select> would close under the pointer). */
-  function renderResetTargets(d, now = Date.now()){
-    const sel = $('rsTarget');
+  /* "All trackers" plus one entry per known tracker with its state, kept
+   * in place so an open dropdown is not rebuilt under the pointer. */
+  function fillTargets(sel, d, now){
     const ids = [...d.seen.keys()].sort((a, b) => a - b);
     const want = ['all', ...ids.map(String)];
     for (const o of [...sel.options]) if (!want.includes(o.value)) o.remove();
@@ -589,6 +603,12 @@ export function createManage(ctx){
         : t('otaTracker', { id: Number(v) }) + ' · ' + stateLabel(trackerState(d, Number(v), now));
     });
     if (!want.includes(sel.value)) sel.value = 'all';
+  }
+
+  function renderResetTargets(d, now = Date.now()){
+    fillTargets($('rsTarget'), d, now);
+    fillTargets($('calTarget'), d, now);
+    fillTargets($('tcTarget'), d, now);
     renderResetButtons(d, now);
   }
 
@@ -608,7 +628,7 @@ export function createManage(ctx){
       if (!canCal) note = t('rsNeedOnOne');
       else if (d.removeSupported === false) note = t('rsOldDongle');
     }
-    $('btnRsCal').disabled = !canCal;
+    $('btnRsCal').disabled = !canCal || !rsWhich().length;
     $('btnRsFactory').disabled = !canCal;
     $('btnRsRemove').disabled = !canRemove;
     $('btnRsRemove').title = target === 'all' ? t('rsRemoveOneOnly') : '';
@@ -657,7 +677,8 @@ export function createManage(ctx){
     const ids = target === 'all' ? [...d.seen.keys()].sort((a, b) => a - b) : [target];
     const who = target === 'all' ? t('rsAllShort') : t('otaTracker', { id: target });
     const ok = kind === 'cal'
-      ? await ctx.confirm(t('rsCalConfirmT', { who }), t('rsCalConfirm'))
+      ? await ctx.confirm(t('rsCalConfirmT', { who }),
+          t('rsCalConfirm', { what: rsWhich().map(k => t(RS_WHICH_KEY[k])).join(t('rsListSep')) }))
       : kind === 'factory'
         ? await ctx.confirm(t('rsFactoryConfirmT', { who }), t('rsFactoryConfirm'), { danger: true, ack: t('rsAck') })
         : await ctx.confirm(t('rsRemoveConfirmT', { who }), t('rsRemoveConfirm'), { danger: true, ack: t('rsAck') });
@@ -696,7 +717,7 @@ export function createManage(ctx){
       let done = 0, removedOld = false;
       for (const id of live){
         rsRun.res.set(id, { st: 'run' }); renderResetList();
-        const ops = kind === 'factory' ? [...RS_CAL_OPS, OP.RESET_BAT] : RS_CAL_OPS;
+        const ops = kind === 'factory' ? [...RS_CAL_OPS, OP.RESET_BAT] : rsWhich().map(k => RS_WHICH[k]);
         let failed = false;
         for (const op of ops){
           const out = await rsSend(d, op, [id]);
@@ -852,6 +873,7 @@ export function createManage(ctx){
     $('btnTcalStop').onclick = () => stopTcal();
     $('rsTarget').onchange = () => { const d = ctx.dongle(); if (d) renderResetButtons(d); };
     $('btnRsCal').onclick = () => resetAction('cal');
+    for (const box of document.querySelectorAll('#rsWhich input')) box.onchange = () => { const d = ctx.dongle(); if (d) renderResetButtons(d); };
     $('btnRsFactory').onclick = () => resetAction('factory');
     $('btnRsRemove').onclick = () => resetAction('remove');
     $('btnRsPair').onclick = () => run('rsMsg', OP.PAIR, [0], { final: false, ok: 'rsPairOn' });

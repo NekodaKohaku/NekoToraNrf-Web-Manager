@@ -200,6 +200,8 @@ nav.tabs button[aria-current="page"]{color:var(--text);border-bottom-color:var(-
 .calProg{height:8px;border-radius:999px;background:var(--border);overflow:hidden;margin-top:12px}
 .calProg>div{height:100%;width:0;background:var(--primary);transition:width .2s linear}
 .calList{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.rsWhich{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;margin:4px 0 0}
+.rsWhich label{display:flex;align-items:center;gap:5px}
 .rsTargetRow{display:flex;align-items:center;gap:10px;font-size:14px;margin:8px 0 12px;flex-wrap:wrap}
 .rsTargetRow select{padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;min-width:14em}
 .rsActs{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
@@ -514,6 +516,9 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
           <li data-i18n="calStep3"></li>
         </ol>
       </div>
+      <label class="rsTargetRow"><span data-i18n="rsTarget"></span>
+        <select id="calTarget"></select>
+      </label>
       <div class="row">
         <button id="btnCal" class="btn primary" data-i18n="calStart"></button>
       </div>
@@ -556,6 +561,9 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
           <li data-i18n="tcHow3"></li>
           <li data-i18n="tcHow4"></li>
         </ol>
+        <label class="rsTargetRow"><span data-i18n="rsTarget"></span>
+          <select id="tcTarget"></select>
+        </label>
         <div class="row">
           <button id="btnTcalStart" class="btn primary" data-i18n="tcStart"></button>
           <button id="btnTcalStop" class="btn alt" data-i18n="tcStop" disabled></button>
@@ -575,6 +583,12 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
           <div class="rsAct">
             <button id="btnRsCal" class="btn alt" data-i18n="rsCal"></button>
             <p class="desc" data-i18n="rsCalD"></p>
+            <div class="rsWhich" id="rsWhich">
+              <label><input type="checkbox" value="zro" checked><span data-i18n="rsWZro"></span></label>
+              <label><input type="checkbox" value="acc" checked><span data-i18n="rsWAcc"></span></label>
+              <label><input type="checkbox" value="sens" checked><span data-i18n="rsWSens"></span></label>
+              <label><input type="checkbox" value="tcal"><span data-i18n="rsWTcal"></span></label>
+            </div>
           </div>
           <div class="rsAct">
             <button id="btnRsFactory" class="btn danger" data-i18n="rsFactory"></button>

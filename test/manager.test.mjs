@@ -194,6 +194,7 @@ function info(id, pct, vByte, rssi, temp = 25){
   const s = new Uint8Array(16);
   s[0] = 0; s[1] = id; s[2] = 0x80 | pct; s[3] = vByte; s[12] = 1; s[13] = 0; s[14] = 0; s[15] = rssi;
   s[4] = Math.floor((temp - 25) * 2 + 128.5);   // (uint8_t) cast in connection.c
+  if (id === 1) s[7] = 75;                      // tracker 1 reports its cell: 1.25 V
   return s;
 }
 function reg(id){
@@ -275,6 +276,8 @@ check('summary from STATUS: 2 active, 1 standby, 0 off', /運作中 2・待機 1
 const row = id => $('mgList').querySelector(`[data-tid="${id}"]`);
 await until(() => /85%/.test(row(1).textContent));
 check('tracker 1 shows battery and signal', /85%/.test(row(1).textContent) && /-52 dBm/.test(row(1).textContent), row(1).textContent);
+check('tracker 1 shows its real cell voltage', /1\.25 V/.test(row(1).textContent), row(1).textContent);
+check('tracker 2 (no cell byte) shows no voltage', !/ V\b/.test(row(2).textContent.replace(/dBm/, '')), row(2).textContent);
 check('silent tracker marked standby (from STATUS)', /待機/.test(row(3).querySelector('.tState').textContent), row(3).textContent);
 links[3] = 0;
 await until(() => /關機/.test(row(3).querySelector('.tState').textContent), 4000);
@@ -511,7 +514,7 @@ check('unknown file refused', shown('fwErr') && /無法辨識/.test(txt('fwErr')
 await gotoPage('diag');
 click($('btnDiagMake'));
 await sleep(50);
-check('report lists the trackers with battery', /#1 .*battery 85%/.test(txt('diagOut')) && /#3 .*standby/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
+check('report lists the trackers with battery', /#1 .*battery 85% cell 1250 mV/.test(txt('diagOut')) && /#3 .*standby/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
 check('report has the dongle status line', /dongle status: channel 76/.test(txt('diagOut')), txt('diagOut').slice(0, 400));
 
 /* ------------------------- reset and remove -------------------------- */

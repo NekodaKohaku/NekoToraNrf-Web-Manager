@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { classifyFirmwareFile, MCUBOOT_IMAGE_MAGIC } from '../js/image.js';
-import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS, tempFrom } from '../js/telemetry.js';
+import { batteryFrom, rssiFrom, batteryBlocks, applyTelemetry, isAwake, AWAKE_WINDOW_MS, trackerState, STATUS_FRESH_MS, tempFrom, cellFrom } from '../js/telemetry.js';
 import { ackOutcome, RENDEZVOUS, DEFAULT_CHANNEL, busyLevel, busyText, calApplyEvent,
          tcalApplyEvent, tcalRate, tcalSlotTemp, TCAL_SLOTS } from '../js/manage.js';
 import { ACK, parseDongleStatus, parseScanResult, parseTrackerEvent, TEV } from '../js/ota.js';
@@ -163,5 +163,15 @@ check('70 slots, 10 C and 0.5 C apart', TCAL_SLOTS === 70 && tcalSlotTemp(0) ===
 check('rate needs 20 s of history', tcalRate([[0, 30], [10000, 30.2]], 10000) === null);
 check('rate in C per minute', Math.abs(tcalRate([[0, 30], [30000, 30.5], [60000, 31]], 60000) - 1) < 1e-9);
 check('rate uses the last minute only', Math.abs(tcalRate([[0, 20], [60000, 30], [120000, 31]], 120000) - 1) < 1e-9);
+
+/* ---- real cell voltage (info byte 7) ---- */
+check('cell voltage byte decodes', cellFrom(75) === 1250 && cellFrom(1) === 510 && cellFrom(255) === 3050 && cellFrom(0) === null);
+{
+  const s = new Uint8Array(16); s[0] = 0; s[1] = 1; s[2] = 0x80 | 60; s[3] = 0; s[7] = 75;
+  const e = applyTelemetry({}, s, 500);
+  check('info packet carries the cell voltage; empty server byte gives no mV', e.cellMv === 1250 && e.battery.mV === null && !e.battery.charging);
+  const c = new Uint8Array(16); c[0] = 2; c[1] = 1; c[2] = 0x80 | 60; c[7] = 3;
+  check('compact packet byte 7 is quaternion data, not a voltage', applyTelemetry({ cellMv: 1250 }, c, 600).cellMv === 1250);
+}
 
 process.exit(fails ? 1 : 0);

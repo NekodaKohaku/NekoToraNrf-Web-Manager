@@ -6,6 +6,7 @@
 export const EXTRA = {
 
 zh: {
+  battVolt: '{v} V',
   title: 'NekoTora Manager',
   subtitle: 'NekoTora 追蹤器與 Dongle 的更新與管理',
   topConnect: '連接 Dongle',
@@ -212,6 +213,7 @@ zh: {
 },
 
 en: {
+  battVolt: '{v} V',
   title: 'NekoTora Manager',
   subtitle: 'Update and manage NekoTora trackers and the dongle',
   topConnect: 'Connect Dongle',
@@ -418,6 +420,7 @@ en: {
 },
 
 ja: {
+  battVolt: '{v} V',
   title: 'NekoTora Manager',
   subtitle: 'NekoTora トラッカーとドングルの更新・管理',
   topConnect: 'ドングルを接続',

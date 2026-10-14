@@ -224,6 +224,7 @@ export function createManage(ctx){
       const bits = [];
       if (isAwake(e, now) && e.battery && e.battery.present){
         bits.push(e.battery.charging ? t('battCharging') : t('battPct', { pct: e.battery.pct }));
+        if (e.cellMv) bits.push(t('battVolt', { v: (e.cellMv / 1000).toFixed(2) }));
       }
       if (isAwake(e, now) && e.rssi !== undefined) bits.push(e.rssi + ' dBm');
       if (!up && e.addr) bits.push(e.addr);

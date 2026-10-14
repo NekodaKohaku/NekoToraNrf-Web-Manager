@@ -50,7 +50,8 @@ export function buildReport(ctx){
       if (info) parts.push(`fw ${info.version} (${info.bootloader}, ${info.boardTarget})`);
       else if (e.fw) parts.push(`fw ${e.fw}`);
       if (e.battery && e.battery.present){
-        parts.push(`battery ${e.battery.pct}%` + (e.battery.mV ? ` ${e.battery.mV} mV` : '') +
+        parts.push(`battery ${e.battery.pct}%` + (e.cellMv ? ` cell ${e.cellMv} mV` : '') +
+                   (e.battery.mV ? ` (server byte ${e.battery.mV} mV)` : '') +
                    (e.battery.charging ? ' charging' : ''));
       } else if (e.battery){
         parts.push('no battery');

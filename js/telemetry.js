@@ -6,12 +6,15 @@
  * control traffic - OTA (0xF0-0xF7), command ACKs (251), address
  * registration (255) - and must never be mistaken for a tracker being awake.
  *
- *   type 0  info     [2] batt  [3] batt_v  [4] temp  ... [12..14] fw x.y.z  [15] rssi
+ *   type 0  info     [2] batt  [3] batt_v  [4] temp  [7] cell ... [12..14] fw x.y.z  [15] rssi
  *   type 2  compact  [2] batt  [3] batt_v  [4] temp  ...                    [15] rssi
  *   type 3  status   [2] svr_stat [3] status                                [15] rssi
  *   type 5  runtime                                                          [15] rssi
  *
  * temp:   IMU temperature, (byte - 128) / 2 + 25 degrees C; 0 = none.
+ * cell:   NekoTora only, in the byte the protocol leaves reserved: the real
+ *         battery voltage, byte * 10 + 500 mV; 0 = none. (batt_v is what the
+ *         server shows; NiMH trackers no longer fill it, being below its range.)
  * batt:   0 = no battery; 255 = charged; otherwise bit 7 set + percent.
  * batt_v: millivolts / 10 - 245. A tracker on USB power reports at least
  *         4310 mV whatever the cell is at, which is how "charging" is read.
@@ -34,6 +37,10 @@ export function batteryFrom(battByte, voltByte){
   const pct = charged ? 100 : Math.min(100, battByte & 0x7F);
   const mV = voltByte ? (voltByte + 245) * 10 : null;
   return { present: true, pct, mV, charged, charging: mV !== null && mV >= CHARGING_MV };
+}
+
+export function cellFrom(b){
+  return b ? b * 10 + 500 : null;
 }
 
 /* Tracker connection.c: (temp - 25) * 2 + 128.5, clamped to 1..255. */
@@ -63,7 +70,11 @@ export function applyTelemetry(entry, sub, now){
     const r = rssiFrom(sub[15]);
     if (r !== null) entry.rssi = r;
   }
-  if (type === 0) entry.fw = `${sub[12]}.${sub[13]}.${sub[14]}`;
+  if (type === 0){
+    entry.fw = `${sub[12]}.${sub[13]}.${sub[14]}`;
+    const cell = cellFrom(sub[7]);
+    if (cell !== null){ entry.cellMv = cell; entry.cellAt = now; }
+  }
   return entry;
 }
 

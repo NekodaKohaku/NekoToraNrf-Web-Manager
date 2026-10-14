@@ -412,6 +412,7 @@ function liveBits(live){
   if (!live || !isAwake(live)) return bits;
   if (live.battery && live.battery.present){
     bits.push(live.battery.charging ? t('battCharging') : t('battPct', { pct: live.battery.pct }));
+    if (live.cellMv) bits.push(t('battVolt', { v: (live.cellMv / 1000).toFixed(2) }));
   }
   if (live.rssi !== undefined) bits.push(live.rssi + ' dBm');
   return bits;

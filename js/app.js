@@ -37,7 +37,10 @@ const METHODS = {
   ota: { id: 'ota', needs: 'bin', pane: 'paneOta', name: 'mOtaName', tag: 'mOtaTag',
          desc: 'mOtaDesc', connTitle: 'otaStepConnect',
          connDesc: 'otaConnectDesc', accept: '.bin', tagAlt: false },
-  dfu: { id: 'dfu', needs: 'bin', pane: 'paneDfu', name: 'mDfuName', tag: null,
+  /* Wired needs the USB-UART bridge (CH32X035) and a firmware built with the
+   * UART console. Newer boards have neither, so it is tagged as the legacy
+   * path; it stays for older trackers and repairs until those are gone. */
+  dfu: { id: 'dfu', needs: 'bin', pane: 'paneDfu', name: 'mDfuName', tag: 'mDfuTag', tagAlt: true,
          desc: 'mDfuDesc', connTitle: 'dfuStepConnect',
          connDesc: 'dfuConnectDesc', accept: '.bin' },
   swd: { id: 'swd', needs: 'hex', pane: 'paneSwd', name: 'mSwdName', tag: 'mSwdTag',

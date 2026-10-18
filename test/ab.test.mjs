@@ -179,6 +179,10 @@ check('guard: no slot layout leaves the link check to the tracker', !reg.imagePr
 check('manifestFor: variant inherits version', reg.manifestFor(manifest, AB).version === '1.0.6'
       && reg.manifestFor(manifest, AB).binSlot1 === 'ab.slot1.update.bin' && !reg.manifestFor(manifest, AB).variants);
 check('manifestFor: unknown board is null', reg.manifestFor(manifest, 'other') === null);
+const topAb = { version: '1.0.6', versionCode: 0x010006, boardTarget: AB, bin: 'ab.update.bin',
+                binSlot1: 'ab.slot1.update.bin', slotBase: [SLOT_A, SLOT_B] };
+check('manifestFor: A/B build as the top-level entry', reg.manifestFor(topAb, AB) === topAb
+      && reg.manifestFor(topAb, BOARD) === null);
 check('binKeyFor', reg.binKeyFor(infoA) === 'binSlot1' && reg.binKeyFor(infoB) === 'bin' && reg.binKeyFor(infoOw) === 'bin');
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

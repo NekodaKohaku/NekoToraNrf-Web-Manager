@@ -52,6 +52,11 @@ const ORDER = ['ota', 'dfu', 'swd'];
 /* ============================= state ================================= */
 
 const state = {
+  /* A/B confirmation after an update: trackers still on their trial boot
+   * (id -> { prev: FW_INFO before the update, since }) and the outcome per
+   * tracker (confirmed / reverted / unconfirmed), shown in the list. */
+  confirmWatch: new Map(),
+  confirmResults: new Map(),
   method: 'ota',
   device: null,          // registry entry
   manifest: null,
@@ -370,6 +375,12 @@ function renderTrackers(){
     } else if (!tk.info){
       info.textContent = t('otaNoInfo');
       badge.textContent = '?';
+    } else if (state.confirmResults.get(id) === 'reverted' || state.confirmResults.get(id) === 'unconfirmed'){
+      const r = state.confirmResults.get(id);
+      info.textContent = tk.info.version + ' · ' + tk.info.bootloader;
+      badge.textContent = t(r === 'reverted' ? 'pReverted' : 'pUnconfirmed');
+      badge.title = t(r === 'reverted' ? 'errOtaReverted' : 'errOtaUnconfirmed', { v: tk.info.version });
+      badge.classList.add('warn');
     } else if (confirming){
       info.textContent = tk.info.version + ' · ' + tk.info.bootloader;
       badge.textContent = t('otaConfirming');
@@ -381,7 +392,7 @@ function renderTrackers(){
       const latest = state.manualFw ? null : latestFor(tk.info);
       info.textContent = [tk.info.version + ' · ' + tk.info.bootloader, ...liveBits(live)].join(' · ');
       if (latest !== null && tk.info.versionCode >= latest){
-        badge.textContent = t('otaUpToDate');
+        badge.textContent = t(state.confirmResults.get(id) === 'confirmed' ? 'pConfirmed' : 'otaUpToDate');
         badge.classList.add('ok');
       } else {
         badge.textContent = t('otaNeedsUpdate', {
@@ -905,6 +916,39 @@ async function start(){
   }
 }
 
+/* Background follow-up of A/B confirmations once an update has finished.
+ * Polls only while nothing else is using the dongle (a scan, another update)
+ * and stops on its own when every tracker has an outcome. */
+let confirmTimer = null;
+function watchConfirm(entries){
+  const since = Date.now();
+  for (const [id, prev] of entries) state.confirmWatch.set(id, { prev, since });
+  if (state.confirmWatch.size && !confirmTimer) confirmTimer = setTimeout(confirmTick, CONFIRM_POLL_MS);
+}
+async function confirmTick(){
+  confirmTimer = null;
+  if (!state.confirmWatch.size) return;
+  if (state.ota && !state.busy && !state.updating){
+    for (const [id, w] of [...state.confirmWatch]){
+      let info = null;
+      try { info = await state.ota.queryInfo(id, 2500); } catch (_) { info = null; }
+      if (!state.confirmWatch.has(id)) continue;      // a new update took it over
+      const tk = state.trackers.get(id);
+      if (info && tk) tk.info = info;
+      const verdict = reg.confirmVerdict(w.prev, info, Date.now() - w.since, CONFIRM_WAIT_MS);
+      if (!verdict) continue;
+      state.confirmWatch.delete(id);
+      state.confirmResults.set(id, verdict);
+      log(verdict === 'confirmed' ? `tracker ${id}: ${info.version} confirmed`
+        : verdict === 'reverted' ? `tracker ${id}: new image not confirmed, back on ${info.version}`
+        : `tracker ${id}: no confirmation within ${CONFIRM_WAIT_MS / 1000} s`,
+        verdict === 'confirmed' ? 'info' : 'warn');
+    }
+    if (state.method === 'ota') renderTrackers();   /* hidden pages too: shown fresh when opened */
+  }
+  if (state.confirmWatch.size) confirmTimer = setTimeout(confirmTick, CONFIRM_POLL_MS);
+}
+
 /* Progress-row id for the dongle: sorts after every tracker id (0-63) and
  * cannot collide with one. */
 const DONGLE_ROW = 255;
@@ -921,6 +965,7 @@ async function runOta(){
    * image again - MCUboot erased the new one. */
   const before = new Map(ids.map(id => [id, state.trackers.get(id) && state.trackers.get(id).info]));
   const awaiting = new Map();   // id -> time it finished, A/B trackers not yet confirmed
+  for (const id of ids){ state.confirmResults.delete(id); state.confirmWatch.delete(id); }
   const N = ids.length + (doDongle ? 1 : 0);
   makePhases(true);
 
@@ -948,16 +993,10 @@ async function runOta(){
       const prev = before.get(id);
       const tk = state.trackers.get(id);
       if (info && tk) tk.info = info;
-      let verdict = null;
-      if (info && prev && info.bootloader === prev.bootloader){
-        verdict = 'reverted';
-      } else if (info && info.confirmed !== false){
-        verdict = 'confirmed';         // true, or firmware without the flag
-      } else if (Date.now() - doneAt > CONFIRM_WAIT_MS){
-        verdict = 'unconfirmed';
-      }
+      const verdict = reg.confirmVerdict(prev, info, Date.now() - doneAt, CONFIRM_WAIT_MS);
       if (!verdict) continue;
       awaiting.delete(id);
+      state.confirmResults.set(id, verdict);
       if (verdict === 'confirmed'){
         ok.push(id);
         batch.set(id, { id, pct: 1, state: 'confirmed' });
@@ -1044,17 +1083,14 @@ async function runOta(){
     paint();
   }
 
-  /* Wait out the confirmations before anything else - in particular before
-   * the dongle update, whose reset would end the session they report over. */
-  if (awaiting.size){
-    setStage('otaStageConfirm');
-    setDetail(t('otaConfirmHint'));
-    paint();
-    while (awaiting.size){
-      await checkConfirm();
-      if (awaiting.size) await sleep(CONFIRM_POLL_MS);
-    }
-  }
+  /* Trackers still confirming are not waited for: they are already running
+   * the new firmware and usable. They count as updated here, and the outcome
+   * (已確認 / 已回退) arrives in the tracker list from confirmWatch(). One
+   * look first, unless the dongle is about to reset - the last tracker has
+   * usually not had its ~20 s yet, but earlier ones may have. */
+  if (awaiting.size && !doDongle) await checkConfirm();
+  const stillConfirming = [...awaiting.keys()];
+  for (const id of stillConfirming) ok.push(id);
 
   /* The dongle goes last: its reset ends the USB session the trackers were
    * being updated through. */
@@ -1106,10 +1142,12 @@ async function runOta(){
     failed.length ? t('otaPartial', { ok: ok.length, fail: failed.length })
       : ids.length > 1 ? t('otaAllDone', { n: trackersOk })
       : ids.length ? t('otaOkHint') : '',
+    stillConfirming.length ? t('otaConfirmBg', { n: stillConfirming.length }) : '',
     dongleNote,
     failed.some(f => f.id === DONGLE_ROW) ? t('dongleFailHint') : '',
   ].filter(Boolean).join('\n');
   showView('ok');
+  watchConfirm(stillConfirming.map(id => [id, before.get(id)]));
   /* Versions on screen are now stale - the trackers rebooted into new
    * firmware. Re-reading them avoids showing "update available" for something
    * just updated. */

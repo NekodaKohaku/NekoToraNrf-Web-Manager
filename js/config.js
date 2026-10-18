@@ -97,8 +97,9 @@ export const MIN_OTA_BATTERY_PCT = 20;
 
 /* A/B trackers confirm a new image themselves once the receiver link and the
  * IMU have held for 10 s, never before 20 s of uptime (firmware ota_ab.h).
- * The page asks how it went between trackers and, after the last one, every
- * CONFIRM_POLL_MS until CONFIRM_WAIT_MS has passed since that tracker
- * finished. Past that it reports "unconfirmed" rather than guessing. */
+ * The page does not wait for that: an updated tracker is usable at once. It
+ * looks between trackers and then follows up in the background every
+ * CONFIRM_POLL_MS, showing the outcome in the tracker list; past
+ * CONFIRM_WAIT_MS without one it reports "unconfirmed" rather than guessing. */
 export const CONFIRM_POLL_MS = 3000;
 export const CONFIRM_WAIT_MS = 60000;

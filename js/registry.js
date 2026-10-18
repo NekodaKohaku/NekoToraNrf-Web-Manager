@@ -146,6 +146,21 @@ export function imageProblem(img, info, slots){
   return null;
 }
 
+/* Outcome of an A/B update from the tracker's FW_INFO after it, or null
+ * while there is nothing to say yet.
+ *   prev     - FW_INFO before the update
+ *   info     - FW_INFO now (null: no answer)
+ *   waitedMs - since the update finished
+ * Back on the slot it left: MCUboot erased the new image (reverted). New
+ * slot and confirmed, or firmware without the flag: confirmed. Nothing
+ * conclusive past waitMs: unconfirmed. */
+export function confirmVerdict(prev, info, waitedMs, waitMs){
+  if (info && prev && info.bootloader === prev.bootloader) return 'reverted';
+  if (info && info.confirmed !== false) return 'confirmed';
+  if (waitedMs > waitMs) return 'unconfirmed';
+  return null;
+}
+
 /* The dongle's own firmware, when the product has one (devices.json
  * "dongleManifest"). Same manifest shape as a tracker's, with "hex" (the
  * app-only image the page writes over USB) and "uf2" (drag-and-drop recovery)

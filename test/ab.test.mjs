@@ -64,7 +64,7 @@ const { HID, ST } = await import(pathToFileURL(join(root, 'js/ota.js')).href);
 const trackers = {
   0: { board: BOARD, bl: 3, base: 0, ver: [1, 0, 5], flags: 0 },
   1: { board: AB, bl: 4, base: SLOT_A, ver: [1, 0, 5], flags: 0x81 },
-  2: { board: AB, bl: 5, base: SLOT_B, ver: [1, 0, 5], flags: 0x81 },
+  2: { board: AB, bl: 5, base: SLOT_B, ver: [1, 0, 5], flags: 0x81, confirmMs: 5000 },
   3: { board: AB, bl: 4, base: SLOT_A, ver: [1, 0, 5], flags: 0x81, revert: true },
 };
 /* What the tracker reports after its reset: an A/B tracker boots the new
@@ -77,7 +77,7 @@ function rebooted(t){
   t.base = t.bl === 4 ? SLOT_A : SLOT_B;
   t.ver = [1, 0, 6];
   t.flags = 0x80;
-  setTimeout(() => { t.flags = 0x81; }, 400);
+  setTimeout(() => { t.flags = 0x81; }, t.confirmMs || 400);
 }
 const begins = [];   // {id, board, file}
 
@@ -165,8 +165,17 @@ click('btnStart');
 const rowState = id => { const el = $('trkProgress').querySelector(`[data-tid="${id}"]`); return el ? el.querySelector('.tpState').textContent : ''; };
 let sawConfirming = false;
 const sampler = setInterval(() => { if ([1, 2].some(id => rowState(id) === 'Confirming')) sawConfirming = true; }, 20);
-await new Promise(r => setTimeout(r, 12000));
-clearInterval(sampler);
+let resultAt = 0;
+const resultWatch = setInterval(() => { if (!resultAt && !$('resultOk').classList.contains('hidden')) resultAt = Date.now(); }, 20);
+const startedAt = Date.now();
+await new Promise(r => setTimeout(r, 6000));
+const hintAtResult = $('okHint').textContent;
+await new Promise(r => setTimeout(r, 14000));
+clearInterval(sampler); clearInterval(resultWatch);
+const listBadge = id => {
+  const row = [...$('trackerList').querySelectorAll('.trk')].find(r => (r.querySelector('.tName') || {}).textContent === 'Tracker ' + id);
+  return row ? row.querySelector('.tState').textContent : '';
+};
 
 const by = id => begins.find(b => b.id === id) || {};
 check('overwrite board: top-level build', by(0).file === 'ow.update.bin', by(0).file);
@@ -176,12 +185,15 @@ check('A/B on slot B: slot-A build', by(2).file === 'ab.update.bin', by(2).file)
 check('A/B trackers: "+ab" board target', by(1).board === AB && by(2).board === AB, by(1).board + ' / ' + by(2).board);
 check('A/B row shows "Confirming" before the tracker confirms', sawConfirming,
       [1, 2].map(rowState).join(' / '));
-check('confirmed A/B trackers end as Confirmed', rowState(1) === 'Confirmed' && rowState(2) === 'Confirmed',
-      rowState(1) + ' / ' + rowState(2));
-check('a tracker back on its old slot is Rolled back', rowState(3) === 'Rolled back', rowState(3));
+check('result shown without waiting for the slow confirmation', resultAt && resultAt - startedAt < 5000,
+      resultAt ? (resultAt - startedAt) + ' ms' : 'not shown');
+check('result says confirmation continues in the background', /background/.test(hintAtResult), hintAtResult);
 check('overwrite tracker is simply Done', rowState(0) === 'Done', rowState(0));
-check('success screen counts the rollback as a failure', !$('resultOk').classList.contains('hidden')
-      && /3/.test($('okHint').textContent) && /1/.test($('okHint').textContent), $('okHint').textContent);
+check('rollback caught at the end of the batch', rowState(3) === 'Rolled back', rowState(3));
+check('list: quick A/B tracker Confirmed', listBadge(1) === 'Confirmed', listBadge(1));
+check('list: slow A/B tracker Confirmed later, in the background', listBadge(2) === 'Confirmed', listBadge(2));
+check('list: rolled-back tracker flagged', listBadge(3) === 'Rolled back', listBadge(3));
+check('list: overwrite tracker up to date', /up to date/i.test(listBadge(0)), listBadge(0));
 
 /* ---- pure helpers ---- */
 const reg = await import(pathToFileURL(join(root, 'js/registry.js')).href);
@@ -208,6 +220,10 @@ const topAb = { version: '1.0.6', versionCode: 0x010006, boardTarget: AB, bin: '
                 binSlot1: 'ab.slot1.update.bin', slotBase: [SLOT_A, SLOT_B] };
 check('manifestFor: A/B build as the top-level entry', reg.manifestFor(topAb, AB) === topAb
       && reg.manifestFor(topAb, BOARD) === null);
+check('verdict: same slot again = reverted', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-a', confirmed: true }, 0, 60000) === 'reverted');
+check('verdict: new slot unconfirmed = keep waiting', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-b', confirmed: false }, 1000, 60000) === null);
+check('verdict: new slot confirmed', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-b', confirmed: true }, 1000, 60000) === 'confirmed');
+check('verdict: silence past the wait = unconfirmed', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, null, 61000, 60000) === 'unconfirmed');
 check('binKeyFor', reg.binKeyFor(infoA) === 'binSlot1' && reg.binKeyFor(infoB) === 'bin' && reg.binKeyFor(infoOw) === 'bin');
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

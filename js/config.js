@@ -94,3 +94,11 @@ export const DFU_BAUD = 1000000;
  * also least accurate near empty. 20 is a conservative guess, not a measured
  * figure; revisit once an update's consumption has been measured. */
 export const MIN_OTA_BATTERY_PCT = 20;
+
+/* A/B trackers confirm a new image themselves once the receiver link and the
+ * IMU have held for 10 s, never before 20 s of uptime (firmware ota_ab.h).
+ * The page asks how it went between trackers and, after the last one, every
+ * CONFIRM_POLL_MS until CONFIRM_WAIT_MS has passed since that tracker
+ * finished. Past that it reports "unconfirmed" rather than guessing. */
+export const CONFIRM_POLL_MS = 3000;
+export const CONFIRM_WAIT_MS = 60000;

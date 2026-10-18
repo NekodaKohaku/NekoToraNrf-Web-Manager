@@ -10,7 +10,7 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT } from './config.js';
+import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT, CONFIRM_POLL_MS, CONFIRM_WAIT_MS } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb, sleep } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
@@ -126,7 +126,11 @@ const P_STATE = {
   queued: 'pQueued', sending: 'pSending', done: 'pArrived',
   verifying: 'pVerifying', activating: 'pActivating',
   complete: 'pComplete', failed: 'pFailed',
+  confirming: 'pConfirming', confirmed: 'pConfirmed',
+  reverted: 'pReverted', unconfirmed: 'pUnconfirmed',
 };
+const P_CLASS = { failed: ' failed', reverted: ' failed', unconfirmed: ' warn',
+                  complete: ' complete', confirmed: ' complete' };
 
 function renderTrackerProgress(per){
   const box = $('trkProgress');
@@ -145,14 +149,13 @@ function renderTrackerProgress(per){
       box.appendChild(el);
     }
     el.querySelector('.tpName').textContent = row.name || t('otaTracker', { id: row.id });
-    el.className = 'tp' + (row.state === 'failed' ? ' failed'
-                        : row.state === 'complete' ? ' complete' : '');
+    el.className = 'tp' + (P_CLASS[row.state] || '');
     el.querySelector('.tpBar > div').style.width =
       Math.round(Math.max(0, Math.min(1, row.pct || 0)) * 100) + '%';
     el.querySelector('.tpState').textContent = row.state === 'failed' && row.error
       ? t('pFailed')
       : t(P_STATE[row.state] || 'pSending');
-    el.title = row.state === 'failed' && row.error ? errText(row.error) : '';
+    el.title = row.error ? errText(row.error) : '';
   }
   for (const el of [...box.children]){
     if (!seen.has(Number(el.dataset.tid))) el.remove();
@@ -331,7 +334,10 @@ function renderTrackers(){
      * with a mismatched target comes back BOARD_MISMATCH and nothing is
      * written - so this is about not offering an action that cannot work,
      * rather than about safety. */
-    const eligible = tk.online && tk.info && !lowBatt && boardOk(tk.info);
+    /* An A/B tracker still on its trial boot refuses a new image (the other
+     * slot holds the only confirmed one), so it is not offered. */
+    const confirming = !!tk.info && reg.isAbTracker(tk.info) && tk.info.confirmed === false;
+    const eligible = tk.online && tk.info && !lowBatt && boardOk(tk.info) && !confirming;
     cb.disabled = !eligible;
     /* A low battery is something to act on, so its row stays readable. */
     if (!eligible && !lowBatt) row.classList.add('dim');
@@ -364,6 +370,9 @@ function renderTrackers(){
     } else if (!tk.info){
       info.textContent = t('otaNoInfo');
       badge.textContent = '?';
+    } else if (confirming){
+      info.textContent = tk.info.version + ' · ' + tk.info.bootloader;
+      badge.textContent = t('otaConfirming');
     } else if (!boardOk(tk.info)){
       info.textContent = tk.info.version;
       badge.textContent = t('otaMismatch', { board: tk.info.boardTarget || '?' });
@@ -792,6 +801,7 @@ async function scanTrackers(){
       tk.querying = false;
       const latest = latestFor(tk.info);
       if (tk.info && boardOk(tk.info) && !trackerBatteryBlock(id) &&
+          !(reg.isAbTracker(tk.info) && tk.info.confirmed === false) &&
           latest !== null && tk.info.versionCode < latest){
         outdated.push(id);
       }
@@ -906,6 +916,11 @@ async function runOta(){
   }
   const doDongle = state.dongleSelected;
   const images = new Map();
+  /* What each tracker ran before, to tell a confirmed update from a revert:
+   * an A/B tracker that comes back on the slot it left is running the old
+   * image again - MCUboot erased the new one. */
+  const before = new Map(ids.map(id => [id, state.trackers.get(id) && state.trackers.get(id).info]));
+  const awaiting = new Map();   // id -> time it finished, A/B trackers not yet confirmed
   const N = ids.length + (doDongle ? 1 : 0);
   makePhases(true);
 
@@ -923,8 +938,48 @@ async function runOta(){
 
   const ok = [], failed = [];
 
+  /* One look at every tracker still confirming. Run only between trackers
+   * and after the last: a query during another tracker's transfer competes
+   * with it for the radio. */
+  const checkConfirm = async () => {
+    for (const [id, doneAt] of [...awaiting]){
+      let info = null;
+      try { info = await state.ota.queryInfo(id, 2500); } catch (_) { info = null; }
+      const prev = before.get(id);
+      const tk = state.trackers.get(id);
+      if (info && tk) tk.info = info;
+      let verdict = null;
+      if (info && prev && info.bootloader === prev.bootloader){
+        verdict = 'reverted';
+      } else if (info && info.confirmed !== false){
+        verdict = 'confirmed';         // true, or firmware without the flag
+      } else if (Date.now() - doneAt > CONFIRM_WAIT_MS){
+        verdict = 'unconfirmed';
+      }
+      if (!verdict) continue;
+      awaiting.delete(id);
+      if (verdict === 'confirmed'){
+        ok.push(id);
+        batch.set(id, { id, pct: 1, state: 'confirmed' });
+        log(`tracker ${id}: ${info.version} confirmed`);
+      } else if (verdict === 'reverted'){
+        const e = mkErr('errOtaReverted', { v: info.version });
+        failed.push({ id, error: e });
+        batch.set(id, { id, pct: 1, state: 'reverted', error: e });
+        log(`tracker ${id}: new image not confirmed, back on ${info.version}`, 'err');
+      } else {
+        const e = mkErr('errOtaUnconfirmed');
+        failed.push({ id, error: e });
+        batch.set(id, { id, pct: 1, state: 'unconfirmed', error: e });
+        log(`tracker ${id}: no confirmation within ${CONFIRM_WAIT_MS / 1000} s`, 'warn');
+      }
+      paint();
+    }
+  };
+
   for (let i = 0; i < ids.length; i++){
     const id = ids[i];
+    if (awaiting.size) await checkConfirm();
     const label = { i: i + 1, n: ids.length, id };
     batch.set(id, { id, pct: 0, state: 'sending' });
 
@@ -973,7 +1028,12 @@ async function runOta(){
       paint();
     });
 
-    if (res.ok.length){
+    if (res.ok.length && reg.isAbTracker(before.get(id))){
+      /* Written and rebooted - but on A/B that is a trial boot. Done only
+       * once the tracker confirms the image; a reset first reverts it. */
+      awaiting.set(id, Date.now());
+      batch.set(id, { id, pct: 1, state: 'confirming' });
+    } else if (res.ok.length){
       ok.push(id);
       batch.set(id, { id, pct: 1, state: 'complete' });
     } else {
@@ -982,6 +1042,18 @@ async function runOta(){
       batch.set(id, { id, pct: 0, state: 'failed', error: e });
     }
     paint();
+  }
+
+  /* Wait out the confirmations before anything else - in particular before
+   * the dongle update, whose reset would end the session they report over. */
+  if (awaiting.size){
+    setStage('otaStageConfirm');
+    setDetail(t('otaConfirmHint'));
+    paint();
+    while (awaiting.size){
+      await checkConfirm();
+      if (awaiting.size) await sleep(CONFIRM_POLL_MS);
+    }
   }
 
   /* The dongle goes last: its reset ends the USB session the trackers were

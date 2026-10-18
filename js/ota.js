@@ -437,7 +437,7 @@ export function parseFwInfo(chunks){
   const second = (raw & 0x1F) * 2;
 
   let boardEnd = 15;
-  while (boardEnd < 63 && info[boardEnd] !== 0) boardEnd++;
+  while (boardEnd < 62 && info[boardEnd] !== 0) boardEnd++;
 
   /* 4/5: MCUboot A/B (direct-XIP), running from slot A / slot B. */
   const BL = { 0: 'none', 1: 'adafruit_uf2', 2: 'nrf5_opendfu', 3: 'mcuboot', 4: 'mcuboot-a', 5: 'mcuboot-b' };
@@ -452,6 +452,10 @@ export function parseFwInfo(chunks){
     bootloader: BL[info[13]] || `unknown(${info[13]})`,
     protocolVersion: info[14],
     boardTarget: new TextDecoder().decode(info.subarray(15, boardEnd)),
+    /* Byte 62 flags: 0x80 = valid, 0x01 = MCUboot image confirmed. null from
+     * firmware that predates them. false means the tracker is on the first,
+     * trial boot of a new image and has not confirmed it yet. */
+    confirmed: (info[62] & 0x80) ? !!(info[62] & 0x01) : null,
     flashBase: dv.getUint16(63, false) << 12,
     chunks: got,
   };

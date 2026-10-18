@@ -62,10 +62,23 @@ const { HID, ST } = await import(pathToFileURL(join(root, 'js/ota.js')).href);
 
 /* id -> what the tracker reports */
 const trackers = {
-  0: { board: BOARD, bl: 3, base: 0 },
-  1: { board: AB, bl: 4, base: SLOT_A },
-  2: { board: AB, bl: 5, base: SLOT_B },
+  0: { board: BOARD, bl: 3, base: 0, ver: [1, 0, 5], flags: 0 },
+  1: { board: AB, bl: 4, base: SLOT_A, ver: [1, 0, 5], flags: 0x81 },
+  2: { board: AB, bl: 5, base: SLOT_B, ver: [1, 0, 5], flags: 0x81 },
+  3: { board: AB, bl: 4, base: SLOT_A, ver: [1, 0, 5], flags: 0x81, revert: true },
 };
+/* What the tracker reports after its reset: an A/B tracker boots the new
+ * slot unconfirmed and confirms a little later; one marked `revert` comes
+ * back on the old slot and version, as after MCUboot erased the new image. */
+function rebooted(t){
+  if (t.bl === 3){ t.ver = [1, 0, 6]; return; }
+  if (t.revert) return;
+  t.bl = t.bl === 4 ? 5 : 4;
+  t.base = t.bl === 4 ? SLOT_A : SLOT_B;
+  t.ver = [1, 0, 6];
+  t.flags = 0x80;
+  setTimeout(() => { t.flags = 0x81; }, 400);
+}
 const begins = [];   // {id, board, file}
 
 function makeDongle(ids){
@@ -96,9 +109,10 @@ function makeDongle(ids){
       if (type === HID.QUERY_INFO){
         const t = trackers[tid] || { board: 'dongle', bl: 1, base: 0 };   // the dongle itself
         const info = new Uint8Array(66); const idv = new DataView(info.buffer);
-        info[2] = 1; info[3] = 0; info[4] = 5;                 // running 1.0.5
+        [info[2], info[3], info[4]] = t.ver || [1, 0, 5];
         info[13] = t.bl; info[14] = 1;
         new TextEncoder().encodeInto(t.board, info.subarray(15));
+        info[62] = t.flags || 0;
         idv.setUint16(63, t.base >>> 12, false);
         setTimeout(() => { for (let i = 0; i < 6; i++){
           const f = new Uint8Array(64);
@@ -118,7 +132,7 @@ function makeDongle(ids){
       } else if (type === HID.VERIFY){
         setTimeout(() => status(tid, ST.VERIFY_OK), 10);
       } else if (type === HID.ACTIVATE){
-        setTimeout(() => { status(tid, ST.COMPLETE); st.delete(tid); }, 10);
+        setTimeout(() => { status(tid, ST.COMPLETE); st.delete(tid); if (trackers[tid]) rebooted(trackers[tid]); }, 10);
       }
     },
   };
@@ -126,7 +140,7 @@ function makeDongle(ids){
 
 Object.defineProperty(global, 'navigator', {
   value: { language: 'en',
-           hid: { requestDevice: async () => [makeDongle([0, 1, 2])], getDevices: async () => [], addEventListener: () => {} } },
+           hid: { requestDevice: async () => [makeDongle([0, 1, 2, 3])], getDevices: async () => [], addEventListener: () => {} } },
   configurable: true,
 });
 
@@ -142,13 +156,17 @@ const boxes = () => [...$('trackerList').querySelectorAll('input[type=checkbox]'
 click('btnConnectDongle');
 await new Promise(r => setTimeout(r, 6000));
 
-check('three trackers listed', boxes().length === 3, String(boxes().length) + ' log: ' + (document.getElementById('log') ? document.getElementById('log').textContent.slice(-600) : ''));
+check('four trackers listed', boxes().length === 4, String(boxes().length) + ' log: ' + (document.getElementById('log') ? document.getElementById('log').textContent.slice(-600) : ''));
 check('A/B trackers are not "different model"', boxes().every(b => !b.disabled),
       boxes().map(b => b.disabled).join(','));
-check('all three pre-selected as outdated', boxes().filter(b => b.checked).length === 3);
+check('all four pre-selected as outdated', boxes().filter(b => b.checked).length === 4);
 
 click('btnStart');
-await new Promise(r => setTimeout(r, 6000));
+const rowState = id => { const el = $('trkProgress').querySelector(`[data-tid="${id}"]`); return el ? el.querySelector('.tpState').textContent : ''; };
+let sawConfirming = false;
+const sampler = setInterval(() => { if ([1, 2].some(id => rowState(id) === 'Confirming')) sawConfirming = true; }, 20);
+await new Promise(r => setTimeout(r, 12000));
+clearInterval(sampler);
 
 const by = id => begins.find(b => b.id === id) || {};
 check('overwrite board: top-level build', by(0).file === 'ow.update.bin', by(0).file);
@@ -156,7 +174,14 @@ check('overwrite board: its own board target', by(0).board === BOARD, by(0).boar
 check('A/B on slot A: slot-B build', by(1).file === 'ab.slot1.update.bin', by(1).file);
 check('A/B on slot B: slot-A build', by(2).file === 'ab.update.bin', by(2).file);
 check('A/B trackers: "+ab" board target', by(1).board === AB && by(2).board === AB, by(1).board + ' / ' + by(2).board);
-check('success screen', !$('resultOk').classList.contains('hidden'));
+check('A/B row shows "Confirming" before the tracker confirms', sawConfirming,
+      [1, 2].map(rowState).join(' / '));
+check('confirmed A/B trackers end as Confirmed', rowState(1) === 'Confirmed' && rowState(2) === 'Confirmed',
+      rowState(1) + ' / ' + rowState(2));
+check('a tracker back on its old slot is Rolled back', rowState(3) === 'Rolled back', rowState(3));
+check('overwrite tracker is simply Done', rowState(0) === 'Done', rowState(0));
+check('success screen counts the rollback as a failure', !$('resultOk').classList.contains('hidden')
+      && /3/.test($('okHint').textContent) && /1/.test($('okHint').textContent), $('okHint').textContent);
 
 /* ---- pure helpers ---- */
 const reg = await import(pathToFileURL(join(root, 'js/registry.js')).href);

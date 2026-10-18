@@ -439,7 +439,8 @@ export function parseFwInfo(chunks){
   let boardEnd = 15;
   while (boardEnd < 63 && info[boardEnd] !== 0) boardEnd++;
 
-  const BL = { 0: 'none', 1: 'adafruit_uf2', 2: 'nrf5_opendfu', 3: 'mcuboot' };
+  /* 4/5: MCUboot A/B (direct-XIP), running from slot A / slot B. */
+  const BL = { 0: 'none', 1: 'adafruit_uf2', 2: 'nrf5_opendfu', 3: 'mcuboot', 4: 'mcuboot-a', 5: 'mcuboot-b' };
   const pad = n => String(n).padStart(2, '0');
 
   return {

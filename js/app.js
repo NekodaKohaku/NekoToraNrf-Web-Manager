@@ -14,7 +14,7 @@ import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb, sleep } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
-import { parseUpdateBin, parseAppHex, classifyFirmwareFile } from './image.js';
+import { parseUpdateBin, parseAppHex, classifyFirmwareFile, updateBinInfo } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
 import { Dongle, OtaClient, DONGLE_ID, OP, ALL_TRACKERS } from './ota.js';
@@ -306,8 +306,6 @@ function renderTrackers(){
   renderDongle();
   const list = $('trackerList');
   list.innerHTML = '';
-  const want = state.manifest && state.manifest.boardTarget;
-
   const idle = { standby: 0, off: 0, asleep: 0 };
   for (const [id, tk] of state.trackers){
     const row = document.createElement('div');
@@ -333,8 +331,7 @@ function renderTrackers(){
      * with a mismatched target comes back BOARD_MISMATCH and nothing is
      * written - so this is about not offering an action that cannot work,
      * rather than about safety. */
-    const eligible = tk.online && tk.info && !lowBatt &&
-                     (!want || tk.info.boardTarget === want);
+    const eligible = tk.online && tk.info && !lowBatt && boardOk(tk.info);
     cb.disabled = !eligible;
     /* A low battery is something to act on, so its row stays readable. */
     if (!eligible && !lowBatt) row.classList.add('dim');
@@ -367,12 +364,12 @@ function renderTrackers(){
     } else if (!tk.info){
       info.textContent = t('otaNoInfo');
       badge.textContent = '?';
-    } else if (want && tk.info.boardTarget !== want){
+    } else if (!boardOk(tk.info)){
       info.textContent = tk.info.version;
       badge.textContent = t('otaMismatch', { board: tk.info.boardTarget || '?' });
       badge.classList.add('warn');
     } else {
-      const latest = state.manualFw ? null : state.manifest ? state.manifest.versionCode : null;
+      const latest = state.manualFw ? null : latestFor(tk.info);
       info.textContent = [tk.info.version + ' · ' + tk.info.bootloader, ...liveBits(live)].join(' · ');
       if (latest !== null && tk.info.versionCode >= latest){
         badge.textContent = t('otaUpToDate');
@@ -623,6 +620,51 @@ async function resolveImage(){
     : buildHexFw(got.text, got.name);
 }
 
+/* The manifest entry that fits this tracker (top level or a variant), or
+ * null. With no manifest at all any tracker may take a manual file. */
+function entryFor(info){
+  return info ? reg.manifestFor(state.manifest, info.boardTarget) : null;
+}
+function boardOk(info){
+  return !state.manifest || !state.manifest.boardTarget || !!entryFor(info);
+}
+function latestFor(info){
+  const e = entryFor(info);
+  return e ? e.versionCode : null;
+}
+/* Slot layout for the image checks, from whichever entry declares it. */
+function slotLayout(){
+  const m = state.manifest;
+  if (!m) return null;
+  const all = [m, ...(m.variants || [])];
+  const e = all.find(x => x && Array.isArray(x.slotBase) && x.slotBase.length === 2);
+  return e ? e.slotBase.map(Number) : null;
+}
+
+/* The image for one tracker. A/B trackers need the build for the slot they
+ * are not running from, so a batch can need two different files; fetched
+ * images are cached for the rest of the batch. */
+async function resolveImageFor(info, cache){
+  let fw;
+  if (state.manualFw){
+    fw = state.manualFw;
+  } else {
+    const e = entryFor(info);
+    if (!e) throw mkErr('errOtaMismatch', { board: (info && info.boardTarget) || '?' });
+    const key = reg.binKeyFor(info);
+    const file = e[key];
+    if (!file) throw mkErr('fwLoadFailed', { err: 'manifest has no "' + key + '" for ' + e.boardTarget });
+    if (!cache.has(file)){
+      const got = await reg.fetchImage({ ...e, bin: file }, 'bin');
+      cache.set(file, parseUpdateBin(got.bytes, got.name));
+    }
+    fw = cache.get(file);
+  }
+  const p = reg.imageProblem(updateBinInfo(fw.data), info, slotLayout());
+  if (p) throw mkErr(p.key, p);
+  return fw;
+}
+
 function buildHexFw(text, name){
   const segs = parseIntelHex(text);
   const { flash, uicr } = classifySegments(segs);
@@ -748,9 +790,9 @@ async function scanTrackers(){
       try { tk.info = await state.ota.queryInfo(id, 4000); }
       catch (_) { tk.info = null; }
       tk.querying = false;
-      const want = state.manifest && state.manifest.boardTarget;
-      if (tk.info && (!want || tk.info.boardTarget === want) && !trackerBatteryBlock(id) &&
-          state.manifest && tk.info.versionCode < state.manifest.versionCode){
+      const latest = latestFor(tk.info);
+      if (tk.info && boardOk(tk.info) && !trackerBatteryBlock(id) &&
+          latest !== null && tk.info.versionCode < latest){
         outdated.push(id);
       }
       renderTrackers();
@@ -863,8 +905,7 @@ async function runOta(){
     if (!ids.includes(id)) log(`tracker ${id}: skipped, battery below ${MIN_OTA_BATTERY_PCT}%`, 'warn');
   }
   const doDongle = state.dongleSelected;
-  const board = (state.manifest && state.manifest.boardTarget) || '';
-  const fw = ids.length ? await resolveImage() : null;
+  const images = new Map();
   const N = ids.length + (doDongle ? 1 : 0);
   makePhases(true);
 
@@ -886,6 +927,23 @@ async function runOta(){
     const id = ids[i];
     const label = { i: i + 1, n: ids.length, id };
     batch.set(id, { id, pct: 0, state: 'sending' });
+
+    /* Per tracker: the entry (and so the board target sent in BEGIN) and,
+     * for A/B, the slot build. A file that cannot be right for this tracker
+     * fails this tracker only. */
+    const tkInfo = state.trackers.get(id) && state.trackers.get(id).info;
+    const entry = entryFor(tkInfo);
+    const board = (entry && entry.boardTarget) || (tkInfo && tkInfo.boardTarget) || '';
+    let fw;
+    try { fw = await resolveImageFor(tkInfo, images); }
+    catch (e){
+      log(`tracker ${id}: ${errText(e)}`, 'err');
+      failed.push({ id, error: e });
+      batch.set(id, { id, pct: 0, state: 'failed', error: e });
+      paint();
+      continue;
+    }
+    if (reg.isAbTracker(tkInfo)) log(`tracker ${id}: A/B, running ${tkInfo.bootloader === 'mcuboot-a' ? 'A' : 'B'} -> ${fw.name}`);
 
     const res = await state.ota.update([id], fw, board, ev => {
       if (ev.per && ev.per.length){
@@ -1278,9 +1336,9 @@ async function liveQuery(id, tk){
   } else {
     tk.info = info;
     log(`tracker ${id} came online: ${info.version} (${info.boardTarget})`);
-    const want = state.manifest && state.manifest.boardTarget;
-    if (tk.fresh && state.manifest && !state.manualFw && (!want || info.boardTarget === want)
-        && !trackerBatteryBlock(id) && info.versionCode < state.manifest.versionCode){
+    const latest = latestFor(info);
+    if (tk.fresh && !state.manualFw && latest !== null && boardOk(info)
+        && !trackerBatteryBlock(id) && info.versionCode < latest){
       state.selected.add(id);
     }
   }

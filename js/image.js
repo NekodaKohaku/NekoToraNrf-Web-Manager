@@ -43,6 +43,23 @@ export function parseUpdateBin(bytes, name){
   };
 }
 
+/* What an update image says about itself: header version and the address
+ * its reset vector points at, which is where it was linked to run. A/B
+ * trackers need the build for the slot they are not running from, and an
+ * overwrite-mode tracker copies whatever it gets into slot A - so the link
+ * address is the one fact that tells the two slot builds apart. */
+export function updateBinInfo(bytes){
+  if (!looksLikeUpdateBin(bytes) || bytes.length < 32) return null;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const hdrSize = dv.getUint16(8, true);
+  const reset = bytes.length >= hdrSize + 8 ? (dv.getUint32(hdrSize + 4, true) & ~1) >>> 0 : null;
+  return {
+    major: bytes[20], minor: bytes[21], revision: dv.getUint16(22, true), build: dv.getUint32(24, true),
+    versionCode: ((bytes[20] << 16) | (bytes[21] << 8) | (dv.getUint16(22, true) & 0xFF)) >>> 0,
+    reset,
+  };
+}
+
 /* ------------------------------ dongle ---------------------------------- */
 
 /* Where a dongle's self-update may write (receiver src/receiver_ota.c).

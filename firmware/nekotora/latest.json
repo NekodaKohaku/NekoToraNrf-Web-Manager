@@ -1,5 +1,5 @@
 {
-  "_comment": "由 CI 覆蓋此檔。version 顯示給使用者;versionCode 為 u32 版本碼(0x00MMmmpp,例如 1.2.3 = 66051 = 0x010203),與裝置 versionAddr 的值比對。三種更新方式需要不同檔案:hex = 完整映像(含 MCUboot),SWD 用;bin = MCUboot 簽章更新映像(.update.bin),無線 OTA 與有線 DFU 用。boardTarget 必須與韌體回報的 CONFIG_BOARD_TARGET 完全相同,追蹤器會在 OTA BEGIN 時比對,不符會回 BOARD_MISMATCH。",
+  "_comment": "由 CI 覆蓋此檔。version 顯示給使用者;versionCode 為 u32 版本碼(0x00MMmmpp,例如 1.2.3 = 66051 = 0x010203),與裝置 versionAddr 的值比對。三種更新方式需要不同檔案:hex = 完整映像(含 MCUboot),SWD 用;bin = MCUboot 簽章更新映像(.update.bin),無線 OTA 與有線 DFU 用。boardTarget 必須與韌體回報的 CONFIG_BOARD_TARGET 完全相同,追蹤器會在 OTA BEGIN 時比對,不符會回 BOARD_MISMATCH。A/B 新基板(boardTarget 結尾 +ab)放在 variants 陣列:每個 variant 可覆蓋 boardTarget/hex/bin,並多一個 binSlot1(slot B 用的版本,給目前在 A 區執行的追蹤器);slotBase = [A 區位址, B 區位址](十進位,如 [49152, 512000]),讓頁面在送出前檢查檔案是否給對 slot。",
   "version": "1.0.5",
   "versionCode": 65541,
   "boardTarget": "promicro_uf2/nrf52840/spi",

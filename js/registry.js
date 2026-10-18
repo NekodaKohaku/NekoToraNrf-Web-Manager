@@ -101,6 +101,51 @@ export async function fetchImage(manifest, want){
   };
 }
 
+/* The manifest entry for a tracker's board target.
+ *
+ * The top level describes one build; "variants" may add others for the same
+ * product, matched by board target - e.g. the A/B build, whose trackers
+ * report "<board>+ab". A variant inherits everything it does not override
+ * (version, date). null when nothing in the manifest fits the tracker. */
+export function manifestFor(manifest, boardTarget){
+  if (!manifest) return null;
+  if (!manifest.boardTarget || manifest.boardTarget === boardTarget) return manifest;
+  const v = (manifest.variants || []).find(x => x && x.boardTarget === boardTarget);
+  if (!v) return null;
+  const merged = { ...manifest, ...v };
+  delete merged.variants;
+  return merged;
+}
+
+export const isAbTracker = info => !!info && (info.bootloader === 'mcuboot-a' || info.bootloader === 'mcuboot-b');
+
+/* Which manifest field holds the image a tracker needs: an A/B tracker
+ * running from slot A takes the slot-B build ("binSlot1"); everything else
+ * takes "bin". */
+export const binKeyFor = info => (info && info.bootloader === 'mcuboot-a') ? 'binSlot1' : 'bin';
+
+/* Why an image must not go to this tracker, or null. Only decides what the
+ * page can know: slot layout comes from the manifest ("slotBase": [A, B]),
+ * so without it the link check is left to the tracker, which repeats all of
+ * this before anything is marked for boot.
+ *   img   - updateBinInfo() of the file
+ *   info  - the tracker's FW_INFO
+ *   slots - [slotA, slotB] base addresses, or null */
+export function imageProblem(img, info, slots){
+  if (!img || !info) return null;
+  if (slots && img.reset != null){
+    const [a, b] = slots;
+    const inB = img.reset >= b;
+    const inA = img.reset >= a && img.reset < b;
+    const needB = info.bootloader === 'mcuboot-a';
+    if (needB ? !inB : !inA) return { key: 'errFwWrongSlot', slot: needB ? 'B' : 'A' };
+  }
+  if (isAbTracker(info) && img.versionCode < info.versionCode){
+    return { key: 'errFwNotNewer', v: info.version };
+  }
+  return null;
+}
+
 /* The dongle's own firmware, when the product has one (devices.json
  * "dongleManifest"). Same manifest shape as a tracker's, with "hex" (the
  * app-only image the page writes over USB) and "uf2" (drag-and-drop recovery)

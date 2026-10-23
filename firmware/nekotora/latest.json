@@ -1,10 +1,10 @@
 {
-  "version": "1.0.6",
-  "versionCode": 65542,
+  "version": "1.0.7",
+  "versionCode": 65543,
   "boardTarget": "promicro_uf2/nrf52840/spi+ab",
-  "hex": "nekotora-1.0.6-ab.hex",
-  "bin": "nekotora-1.0.6-ab.update.bin",
-  "binSlot1": "nekotora-1.0.6-ab.slot1.update.bin",
+  "hex": "nekotora-1.0.7-ab.hex",
+  "bin": "nekotora-1.0.7-ab.update.bin",
+  "binSlot1": "nekotora-1.0.7-ab.slot1.update.bin",
   "slotBase": [49152, 512000],
-  "date": "2026-10-22"
+  "date": "2026-10-23"
 }

@@ -103,3 +103,6 @@ export const MIN_OTA_BATTERY_PCT = 20;
  * CONFIRM_WAIT_MS without one it reports "unconfirmed" rather than guessing. */
 export const CONFIRM_POLL_MS = 3000;
 export const CONFIRM_WAIT_MS = 60000;
+/* No verdict of "rolled back" sooner than this after a tracker finished:
+ * until it has rebooted, its old firmware answers for it. */
+export const CONFIRM_GRACE_MS = 10000;

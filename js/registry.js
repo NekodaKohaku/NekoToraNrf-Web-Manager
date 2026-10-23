@@ -154,8 +154,13 @@ export function imageProblem(img, info, slots){
  * Back on the slot it left: MCUboot erased the new image (reverted). New
  * slot and confirmed, or firmware without the flag: confirmed. Nothing
  * conclusive past waitMs: unconfirmed. */
-export function confirmVerdict(prev, info, waitedMs, waitMs){
-  if (info && prev && info.bootloader === prev.bootloader) return 'reverted';
+export function confirmVerdict(prev, info, waitedMs, waitMs, graceMs = 0){
+  /* Same slot as before is only a revert once the tracker has had time to
+   * reboot: right after COMPLETE the old firmware is still running for a
+   * moment and answers a query itself - same slot, same version - which
+   * read as "rolled back" on every tracker. A real revert needs the new
+   * image to boot and reset first, so it cannot show up sooner anyway. */
+  if (info && prev && info.bootloader === prev.bootloader) return waitedMs >= graceMs ? 'reverted' : null;
   if (info && info.confirmed !== false) return 'confirmed';
   if (waitedMs > waitMs) return 'unconfirmed';
   return null;

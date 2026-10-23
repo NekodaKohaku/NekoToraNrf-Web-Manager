@@ -170,6 +170,7 @@ const resultWatch = setInterval(() => { if (!resultAt && !$('resultOk').classLis
 const startedAt = Date.now();
 await new Promise(r => setTimeout(r, 6000));
 const hintAtResult = $('okHint').textContent;
+const row3AtResult = rowState(3);
 await new Promise(r => setTimeout(r, 14000));
 clearInterval(sampler); clearInterval(resultWatch);
 const listBadge = id => {
@@ -189,7 +190,7 @@ check('result shown without waiting for the slow confirmation', resultAt && resu
       resultAt ? (resultAt - startedAt) + ' ms' : 'not shown');
 check('result says confirmation continues in the background', /background/.test(hintAtResult), hintAtResult);
 check('overwrite tracker is simply Done', rowState(0) === 'Done', rowState(0));
-check('rollback caught at the end of the batch', rowState(3) === 'Rolled back', rowState(3));
+check('no rollback verdict before the tracker could have rebooted', row3AtResult === 'Confirming', row3AtResult);
 check('list: quick A/B tracker Confirmed', listBadge(1) === 'Confirmed', listBadge(1));
 check('list: slow A/B tracker Confirmed later, in the background', listBadge(2) === 'Confirmed', listBadge(2));
 check('list: rolled-back tracker flagged', listBadge(3) === 'Rolled back', listBadge(3));
@@ -220,7 +221,8 @@ const topAb = { version: '1.0.6', versionCode: 0x010006, boardTarget: AB, bin: '
                 binSlot1: 'ab.slot1.update.bin', slotBase: [SLOT_A, SLOT_B] };
 check('manifestFor: A/B build as the top-level entry', reg.manifestFor(topAb, AB) === topAb
       && reg.manifestFor(topAb, BOARD) === null);
-check('verdict: same slot again = reverted', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-a', confirmed: true }, 0, 60000) === 'reverted');
+check('verdict: same slot again = reverted', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-a', confirmed: true }, 12000, 60000, 10000) === 'reverted');
+check('verdict: old firmware answering right after COMPLETE is not a revert', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-a', confirmed: true }, 200, 60000, 10000) === null);
 check('verdict: new slot unconfirmed = keep waiting', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-b', confirmed: false }, 1000, 60000) === null);
 check('verdict: new slot confirmed', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, { bootloader: 'mcuboot-b', confirmed: true }, 1000, 60000) === 'confirmed');
 check('verdict: silence past the wait = unconfirmed', reg.confirmVerdict({ bootloader: 'mcuboot-a' }, null, 61000, 60000) === 'unconfirmed');

@@ -10,7 +10,7 @@
  * three copies of firmware selection, three progress bars, three sets of error
  * handling and three sets of translations, drifting apart over time.
  */
-import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT, CONFIRM_POLL_MS, CONFIRM_WAIT_MS } from './config.js';
+import { CONFIG, DFU_BAUD, MIN_OTA_BATTERY_PCT, CONFIRM_POLL_MS, CONFIRM_WAIT_MS, CONFIRM_GRACE_MS } from './config.js';
 import { mkErr, log, logLines, bindLog, clearLog, hex, verStr, kb, sleep } from './util.js';
 import { t, errText, applyLang, detectLang, getLang, LANGS } from './i18n.js';
 import { parseIntelHex, classifySegments } from './hex.js';
@@ -941,8 +941,8 @@ async function start(){
  * and stops on its own when every tracker has an outcome. */
 let confirmTimer = null;
 function watchConfirm(entries){
-  const since = Date.now();
-  for (const [id, prev] of entries) state.confirmWatch.set(id, { prev, since });
+  const now = Date.now();
+  for (const [id, prev, doneAt] of entries) state.confirmWatch.set(id, { prev, since: doneAt || now });
   if (state.confirmWatch.size && !confirmTimer) confirmTimer = setTimeout(confirmTick, CONFIRM_POLL_MS);
 }
 async function confirmTick(){
@@ -955,7 +955,7 @@ async function confirmTick(){
       if (!state.confirmWatch.has(id)) continue;      // a new update took it over
       const tk = state.trackers.get(id);
       if (info && tk) tk.info = info;
-      const verdict = reg.confirmVerdict(w.prev, info, Date.now() - w.since, CONFIRM_WAIT_MS);
+      const verdict = reg.confirmVerdict(w.prev, info, Date.now() - w.since, CONFIRM_WAIT_MS, CONFIRM_GRACE_MS);
       if (!verdict) continue;
       state.confirmWatch.delete(id);
       state.confirmResults.set(id, verdict);
@@ -1013,7 +1013,7 @@ async function runOta(){
       const prev = before.get(id);
       const tk = state.trackers.get(id);
       if (info && tk) tk.info = info;
-      const verdict = reg.confirmVerdict(prev, info, Date.now() - doneAt, CONFIRM_WAIT_MS);
+      const verdict = reg.confirmVerdict(prev, info, Date.now() - doneAt, CONFIRM_WAIT_MS, CONFIRM_GRACE_MS);
       if (!verdict) continue;
       awaiting.delete(id);
       state.confirmResults.set(id, verdict);
@@ -1167,7 +1167,7 @@ async function runOta(){
     failed.some(f => f.id === DONGLE_ROW) ? t('dongleFailHint') : '',
   ].filter(Boolean).join('\n');
   showView('ok');
-  watchConfirm(stillConfirming.map(id => [id, before.get(id)]));
+  watchConfirm(stillConfirming.map(id => [id, before.get(id), awaiting.get(id)]));
   /* Versions on screen are now stale - the trackers rebooted into new
    * firmware. Re-reading them avoids showing "update available" for something
    * just updated. */

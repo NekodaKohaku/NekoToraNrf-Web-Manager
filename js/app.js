@@ -17,6 +17,7 @@ import { parseIntelHex, classifySegments } from './hex.js';
 import { parseUpdateBin, parseAppHex, classifyFirmwareFile, updateBinInfo } from './image.js';
 import { WebUSBTransport, WebHIDTransport, DAP } from './swd.js';
 import { flashViaSwd } from './flash.js';
+import { cpuDiagnose } from './swddiag.js';
 import { Dongle, OtaClient, DONGLE_ID, OP, ALL_TRACKERS } from './ota.js';
 import { batteryBlocks, isAwake, trackerState } from './telemetry.js';
 import { createManage, stateLabel } from './manage.js';
@@ -712,6 +713,25 @@ async function attachProbe(tr){
   const dev = reg.matchProbe(tr.name);
   if (dev) await loadManifestFor(dev, { detected: true });
   refresh();
+}
+
+/* Halt-and-sample diagnosis of a tracker that shows no sign of life (see
+ * swddiag.js). Uses the probe already connected; read-only. */
+async function runCpuDiag(){
+  if (!state.dap){ connFail(mkErr('cpuDiagNoProbe')); return; }
+  if (state.busy) return;
+  const out = $('cpuDiagOut');
+  out.textContent = ''; out.classList.remove('hidden');
+  state.busy = true; gate();
+  try {
+    const lines = await cpuDiagnose(state.dap, { onLine: l => { out.textContent += l + '\n'; } });
+    log('cpu diag: ' + lines.length + ' lines');
+  } catch (e){
+    out.textContent += 'ERROR: ' + errText(e) + '\n';
+    log('cpu diag failed: ' + errText(e), 'err');
+  } finally {
+    state.busy = false; gate();
+  }
 }
 
 async function connectUsb(){
@@ -1573,6 +1593,7 @@ async function init(){
   };
 
   $('btnConnect').onclick = connectUsb;
+  $('btnCpuDiag').onclick = runCpuDiag;
   $('btnConnectHid').onclick = connectProbeHid;
   $('btnConnectDongle').onclick = connectDongle;
   $('btnRescue').onclick = async () => {

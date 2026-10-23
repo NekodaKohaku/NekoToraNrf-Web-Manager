@@ -354,6 +354,12 @@ table.help th{color:var(--muted);font-weight:600;font-size:13px}
     <div id="paneSwd" class="hidden">
       <button id="btnConnect" class="btn primary" data-i18n="connect"></button>
       <button id="btnConnectHid" class="linklike" data-i18n="connectHid"></button>
+      <details class="rescue" id="cpuDiagBox" style="margin-top:12px">
+        <summary data-i18n="cpuDiagTitle"></summary>
+        <p class="desc" data-i18n="cpuDiagDesc"></p>
+        <button id="btnCpuDiag" class="btn" data-i18n="cpuDiagRun"></button>
+        <pre id="cpuDiagOut" class="logBox hidden" style="height:auto;max-height:320px;white-space:pre-wrap;user-select:all"></pre>
+      </details>
     </div>
 
     <p id="connErr" class="desc hidden" style="color:var(--err)"></p>
